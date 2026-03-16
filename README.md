@@ -8,22 +8,19 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 
 | 函数 | 提供商 | CLI 工具 |
 |------|--------|----------|
-| `glm` | 智谱 AI (bigmodel) | claude |
+| `glm` | 智谱 GLM (Zhipu GLM) | claude |
 | `deepseek` | DeepSeek | claude |
-| `kimi` | Moonshot Kimi | claude |
-| `modelscope` | 魔搭平台 | claude |
+| `modelscope` | 魔搭平台 (ModelScope) | claude |
 | `minimaxi` | MiniMax AI | claude |
-| `hybgzs` | hybgzs API | claude |
-| `ccr-code` | Claude Code Router | claude |
-| `gemini` | Google Gemini | gemini |
+| `hybgzs` | 黑与白 | claude |
+| `nvidia` | Nvidia | claude |
 | `codex-cpa` | Codex CPA | codex |
-| `codex-hyb` | Codex Hybgzs | codex |
+| `codex-hyb` | 黑与白公益站 | codex |
 
 ## 依赖
 
 - [cc-switch-cli](https://github.com/SaladDay/cc-switch-cli) - AI 提供商切换工具
 - [claude-code](https://github.com/anthropics/claude-code) - Claude CLI
-- [gemini-cli](https://github.com/google-gemini/gemini-cli) - Gemini CLI (可选)
 - [codex-cli](https://github.com/example/codex) - Codex CLI (可选)
 
 ## 安装
@@ -56,18 +53,6 @@ cc-switch
 cc-switch provider add
 ```
 
-将你的 API 配置添加到 cc-switch 的 provider 中：
-
-| Provider | Base URL |
-|----------|----------|
-| bigmodel | `https://open.bigmodel.cn/api/anthropic` |
-| deepseek | `https://api.deepseek.com/anthropic` |
-| modelscope | `https://api-inference.modelscope.cn` |
-| kimi | `https://api.kimi.com/coding/` |
-| minimaxi | `https://api.minimaxi.com/anthropic` |
-| hybgzs | `https://ai.hybgzs.com/claude` |
-| ccr | `http://127.0.0.1:3456` |
-
 ### 5. 重新加载 shell
 
 ```bash
@@ -79,17 +64,14 @@ exec zsh
 ### 基本用法
 
 ```bash
-# 使用智谱 AI
+# 使用智谱 GLM
 glm "帮我写一个 Python 函数"
 
 # 使用 DeepSeek
 deepseek "解释这段代码"
 
-# 使用 Kimi
-kimi --version
-
-# 使用 Gemini
-gemini "帮我分析这个问题"
+# 使用 Nvidia
+nvidia --version
 
 # 使用 Codex
 codex-cpa "生成一个 REST API"
@@ -99,13 +81,13 @@ codex-cpa "生成一个 REST API"
 
 ```bash
 # 查看当前 provider
-cc provider current
+ccs provider current
 
 # 列出所有 providers
-cc provider list
+ccs provider list
 
 # 切换 provider
-cc provider switch deepseek
+ccs provider switch DeepSeek
 ```
 
 ## 别名
@@ -113,7 +95,7 @@ cc provider switch deepseek
 插件提供了以下别名：
 
 ```zsh
-cc  # cc-switch 的简写
+ccs  # cc-switch 的简写
 ```
 
 ## 配置示例
@@ -124,12 +106,12 @@ cc  # cc-switch 的简写
 
 ```yaml
 providers:
-  bigmodel:
+  "Zhipu GLM":
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "your-api-key"
     model: "glm-4.7"
 
-  deepseek:
+  DeepSeek:
     base_url: "https://api.deepseek.com/anthropic"
     api_key: "your-api-key"
     model: "deepseek-chat"
