@@ -78,7 +78,7 @@ _ai_cli_ensure_provider() {
 # === Provider 环境变量提取函数 ===
 
 # 从 cc-switch config show 输出中提取指定 provider 的环境变量
-# 参数: $1 = provider_name, $2 = app (claude)
+# 参数: $1 = provider_name, $2 = app (claude/codex)
 # 输出: key=value 格式的环境变量，每行一个
 _ai_cli_get_provider_env() {
     local provider_name="$1"
@@ -90,7 +90,7 @@ _ai_cli_get_provider_env() {
         return 1
     fi
 
-    # 获取完整配置 JSON（使用 sed 提取 JSON 部分，跳过头部标题）
+    # 获取完整配置 JSON
     local config=$(_cc_switch config show 2>/dev/null | sed -n '/^{/,$p')
 
     if [[ -z "$config" ]]; then
@@ -98,15 +98,38 @@ _ai_cli_get_provider_env() {
         return 1
     fi
 
-    # 使用 jq 提取环境变量（here-string 方式，无需临时文件）
-    jq -r --arg app "$app" --arg name "$provider_name" '
+    # 使用单次 jq 调用提取环境变量，避免多行字符串解析问题
+    # Claude: .settingsConfig.env (包含 BASE_URL)
+    # Codex: .settingsConfig.auth (API_KEY) + .meta.custom_endpoints (BASE_URL)
+    local env_vars=$(jq -r --arg app "$app" --arg name "$provider_name" '
         .[$app].providers |
         to_entries[] |
         select(.value.name == $name) |
-        .value.settingsConfig.env // empty |
-        to_entries[] |
-        "\(.key)=\(.value)"
-    ' <<< "$config"
+        .value |
+        (
+            # 提取 auth/env 中的环境变量
+            .settingsConfig |
+            (.env // .auth // empty) |
+            to_entries[] |
+            "\(.key)=\(.value)"
+        ),
+        (
+            # 对于 Codex，从 custom_endpoints 提取 base_url
+            if $app == "codex" then
+                .meta.custom_endpoints // empty |
+                to_entries[0].value.url // empty |
+                if . != "null" and . != "" then
+                    "OPENAI_BASE_URL=\(.)"
+                else
+                    empty
+                end
+            else
+                empty
+            end
+        )
+    ' <<< "$config")
+
+    echo "$env_vars"
 }
 
 # 设置 provider 环境变量并启动 CLI（新方式，不使用 switch）
@@ -132,20 +155,25 @@ _ai_cli_launch_with_provider() {
     env $(echo "$env_vars") command claude "$@"
 }
 
-# === Provider 静默切换辅助函数 ===
-# 静默切换 provider，失败时显示错误
-# 参数: $1 = provider_id, $2 = app (默认 claude)
-_ai_cli_switch_provider_silent() {
-    local provider_id="$1"
-    local app="${2:-claude}"
-    local error_output
+# 设置 provider 环境变量并启动 Codex CLI
+# 参数: $1 = provider_name, $2.. = CLI 参数
+_ai_cli_launch_codex_with_provider() {
+    local provider_name="$1"
+    shift  # 移除第一个参数，剩余为 CLI 参数
 
-    # 切换 provider，抑制成功消息，捕获错误
-    if ! error_output=$(_cc_switch -a "$app" provider switch "$provider_id" 2>&1 >/dev/null); then
-        echo "$error_output" >&2
+    # 检查 provider 是否存在
+    _ai_cli_ensure_provider "$provider_name" "codex" || return 1
+
+    # 获取环境变量
+    local env_vars=$(_ai_cli_get_provider_env "$provider_name" "codex")
+
+    if [[ -z "$env_vars" ]]; then
+        echo "❌ 无法获取 provider '$provider_name' 的环境变量配置" >&2
         return 1
     fi
-    return 0
+
+    # 批量设置环境变量并启动 CLI
+    env $(echo "$env_vars") command codex "$@"
 }
 
 # === Claude 便捷调用函数 ===
@@ -178,21 +206,15 @@ function nvidia() {
 
 # === Codex 便捷调用函数 ===
 function codex-cpa() {
-    _ai_cli_ensure_provider "CPA" "codex" || return 1
-    local id=$(_ai_cli_get_provider_id "CPA" "codex")
-    _ai_cli_switch_provider_silent "$id" "codex" && command codex "$@"
+    _ai_cli_launch_codex_with_provider "CPA" "$@"
 }
 
 function codex-hyb() {
-    _ai_cli_ensure_provider "黑与白公益站" "codex" || return 1
-    local id=$(_ai_cli_get_provider_id "黑与白公益站" "codex")
-    _ai_cli_switch_provider_silent "$id" "codex" && command codex "$@"
+    _ai_cli_launch_codex_with_provider "黑与白" "$@"
 }
 
 function codex-openai() {
-    _ai_cli_ensure_provider "OpenAI Official" "codex" || return 1
-    local id=$(_ai_cli_get_provider_id "OpenAI Official" "codex")
-    _ai_cli_switch_provider_silent "$id" "codex" && command codex "$@"
+    _ai_cli_launch_codex_with_provider "OpenAI Official" "$@"
 }
 
 # === 未配置的函数（占位符，需要先在 cc-switch 中配置）===
