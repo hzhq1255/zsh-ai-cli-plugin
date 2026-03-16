@@ -15,7 +15,7 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `hybgzs` | 黑与白 | claude |
 | `nvidia` | Nvidia | claude |
 | `codex-cpa` | Codex CPA | codex |
-| `codex-hyb` | 黑与白公益站 | codex |
+| `codex-hyb` | 黑与白 | codex |
 | `codex-openai` | OpenAI Official | codex |
 
 ## 依赖
@@ -23,6 +23,17 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 - [cc-switch-cli](https://github.com/SaladDay/cc-switch-cli) - AI 提供商切换工具
 - [claude-code](https://github.com/anthropics/claude-code) - Claude CLI
 - [codex-cli](https://github.com/example/codex) - Codex CLI (可选)
+- [jq](https://stedolan.github.io/jq/) - JSON 处理工具（解析配置）
+
+安装 jq：
+```bash
+# macOS
+brew install jq
+
+# Linux
+sudo apt-get install jq  # Debian/Ubuntu
+sudo yum install jq      # CentOS/RHEL
+```
 
 ## 安装
 
@@ -71,6 +82,14 @@ ccs provider add
 | MiniMax | `https://api.minimax.chat/v1` | `abab6.5s-chat` |
 | 黑与白 | `https://heiyu.com/v1` | `claude-3-5-sonnet` |
 | Nvidia | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.1-405b-instruct` |
+
+**Codex provider 配置** (通过 cc-switch 的 codex app 管理):
+
+| Provider | base_url | model |
+|----------|----------|-------|
+| CPA | `https://cliproxyapi.hzhq1255.work` | `gpt-5.4` |
+| 黑与白 | `https://ai.hybgzs.com/v1` | `gpt-5.4` |
+| OpenAI Official | (官方默认) | (官方默认) |
 
 ### 5. 验证配置
 
@@ -123,6 +142,33 @@ ccs provider list
 
 # 切换 provider
 ccs provider switch DeepSeek
+```
+
+## 实现原理
+
+本插件采用**环境变量注入**方式，而非传统的 provider 切换方式：
+
+### 传统方式 vs 本插件
+
+| 特性 | 传统 switch 方式 | 环境变量注入方式 |
+|------|-----------------|-----------------|
+| 实现原理 | 调用 `cc-switch provider switch` | 直接从配置读取环境变量 |
+| 隔离性 | 全局状态，影响所有 session | 每次调用独立，无副作用 |
+| 故障转移 | 需手动切换 | 自动读取配置，支持故障转移 |
+| 配置结构 | 仅支持 `.env` 字段 | 支持 `.env` 和 `.auth` 字段 |
+
+### 核心函数
+
+- `_ai_cli_get_provider_env`: 从 cc-switch 配置提取环境变量
+  - Claude: 读取 `.settingsConfig.env`
+  - Codex: 读取 `.settingsConfig.auth` + `.meta.custom_endpoints`
+- `_ai_cli_launch_with_provider`: 设置环境变量并启动 Claude CLI
+- `_ai_cli_launch_codex_with_provider`: 设置环境变量并启动 Codex CLI
+
+```bash
+# 等价于手动设置环境变量并调用 CLI
+env ANTHROPIC_AUTH_TOKEN=xxx ANTHROPIC_BASE_URL=xxx command claude "$@"
+env OPENAI_API_KEY=xxx OPENAI_BASE_URL=xxx command codex "$@"
 ```
 
 ## 别名
