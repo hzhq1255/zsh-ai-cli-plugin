@@ -16,6 +16,7 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `nvidia` | Nvidia | claude |
 | `codex-cpa` | Codex CPA | codex |
 | `codex-hyb` | 黑与白公益站 | codex |
+| `codex-openai` | OpenAI Official | codex |
 
 ## 依赖
 
@@ -106,6 +107,9 @@ nvidia --version
 
 # 使用 Codex
 codex-cpa "生成一个 REST API"
+
+# 使用 OpenAI 官方 Codex
+codex-openai "生成一个 REST API"
 ```
 
 ### 查看/管理 Provider
