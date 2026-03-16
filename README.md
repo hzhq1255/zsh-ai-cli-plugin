@@ -46,14 +46,45 @@ plugins=(... ai-cli)
 ### 4. 配置 cc-switch providers
 
 ```bash
-# 进入交互模式配置
+# 进入交互式配置界面（推荐）
+ccs
+# 或
 cc-switch
 
-# 或命令行添加
-cc-switch provider add
+# 在界面中:
+# 1. 选择 "provider" 菜单
+# 2. 选择 "add" 添加新的 provider
+# 3. 填写 provider 信息（名称、base_url、api_key、model）
+
+# 也可以直接命令行添加
+ccs provider add
 ```
 
-### 5. 重新加载 shell
+**常用 provider 配置示例** (在交互式界面中填写):
+
+| Provider | base_url | model |
+|----------|----------|-------|
+| Zhipu GLM | `https://open.bigmodel.cn/api/anthropic` | `glm-4.7` |
+| DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-chat` |
+| ModelScope | `https://api.modelscope.cn/v1` | `qwen-max` |
+| MiniMax | `https://api.minimax.chat/v1` | `abab6.5s-chat` |
+| 黑与白 | `https://heiyu.com/v1` | `claude-3-5-sonnet` |
+| Nvidia | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.1-405b-instruct` |
+
+### 5. 验证配置
+
+```bash
+# 列出所有已配置的 providers
+ccs provider list
+
+# 查看当前使用的 provider
+ccs provider current
+
+# 验证配置是否有效
+ccs config validate
+```
+
+### 6. 重新加载 shell
 
 ```bash
 exec zsh
@@ -96,25 +127,6 @@ ccs provider switch DeepSeek
 
 ```zsh
 ccs  # cc-switch 的简写
-```
-
-## 配置示例
-
-### cc-switch provider 配置
-
-在 `~/.config/cc-switch/config.yaml` 中配置：
-
-```yaml
-providers:
-  "Zhipu GLM":
-    base_url: "https://open.bigmodel.cn/api/anthropic"
-    api_key: "your-api-key"
-    model: "glm-4.7"
-
-  DeepSeek:
-    base_url: "https://api.deepseek.com/anthropic"
-    api_key: "your-api-key"
-    model: "deepseek-chat"
 ```
 
 ## 许可
