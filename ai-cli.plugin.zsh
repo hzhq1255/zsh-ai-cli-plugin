@@ -136,6 +136,12 @@ function codex-hyb() {
     _ai_cli_switch_provider_silent "$id" "codex" && command codex "$@"
 }
 
+function codex-openai() {
+    _ai_cli_ensure_provider "OpenAI Official" "codex" || return 1
+    local id=$(_ai_cli_get_provider_id "OpenAI Official" "codex")
+    _ai_cli_switch_provider_silent "$id" "codex" && command codex "$@"
+}
+
 # === 未配置的函数（占位符，需要先在 cc-switch 中配置）===
 # function kimi() { cc-switch provider switch Kimi; command claude "$@"; }
 # function ccr-code() { cc-switch provider switch CCR; command claude "$@"; }
