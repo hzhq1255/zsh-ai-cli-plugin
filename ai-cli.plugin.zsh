@@ -150,9 +150,58 @@ _ai_cli_launch_with_provider() {
         return 1
     fi
 
-    # 批量设置环境变量并启动 CLI
-    # 使用 env 子进程确保环境变量只影响当前命令
-    env $(echo "$env_vars") command claude "$@"
+    local settings_file="$HOME/.claude/settings.json"
+
+    # === 备份 settings.json 中的 env 配置 ===
+    local saved_env_json=""
+    if [[ -f "$settings_file" ]]; then
+        saved_env_json=$(jq '.env // {}' "$settings_file" 2>/dev/null)
+    fi
+
+    # === 清空 settings.json 中的 env 配置（设置为空对象）===
+    if [[ -f "$settings_file" ]]; then
+        jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+    fi
+
+    # === 扫描并保存所有 ANTHROPIC_ 开头的环境变量 ===
+    local saved_anthropic_vars=""
+    local var_name var_value
+    for var_name in ${(k)parameters}; do
+        if [[ "$var_name" == ANTHROPIC_* ]]; then
+            var_value="${(P)var_name}"
+            saved_anthropic_vars+="$var_name=$var_value"$'\n'
+        fi
+    done
+
+    {
+        # === 清空所有 ANTHROPIC_ 开头的环境变量 ===
+        for var_name in ${(k)parameters}; do
+            [[ "$var_name" == ANTHROPIC_* ]] && unset "$var_name"
+        done
+
+        # === 设置 provider 环境变量 ===
+        while IFS='=' read -r key value; do
+            [[ -n "$key" ]] && export "$key=$value"
+        done <<< "$env_vars"
+
+        # === 显示切换信息 ===
+        echo "🔄 Switching to $provider_name..."
+        [[ "$app" == "claude" ]] && echo "📝 BASE_URL: $ANTHROPIC_BASE_URL"
+        echo ""
+
+        # === 启动 CLI ===
+        command claude "$@"
+    }
+
+    # === 恢复原始环境变量 ===
+    while IFS='=' read -r var_name var_value; do
+        [[ -n "$var_name" ]] && export "$var_name=$var_value"
+    done <<< "$saved_anthropic_vars"
+
+    # === 恢复 settings.json 中的 env 配置 ===
+    if [[ -f "$settings_file" && -n "$saved_env_json" ]]; then
+        jq --argjson env "$saved_env_json" '.env = $env' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+    fi
 }
 
 # 设置 provider 环境变量并启动 Codex CLI
@@ -172,8 +221,58 @@ _ai_cli_launch_codex_with_provider() {
         return 1
     fi
 
-    # 批量设置环境变量并启动 CLI
-    env $(echo "$env_vars") command codex "$@"
+    local settings_file="$HOME/.claude/settings.json"
+
+    # === 备份 settings.json 中的 env 配置 ===
+    local saved_env_json=""
+    if [[ -f "$settings_file" ]]; then
+        saved_env_json=$(jq '.env // {}' "$settings_file" 2>/dev/null)
+    fi
+
+    # === 清空 settings.json 中的 env 配置（设置为空对象）===
+    if [[ -f "$settings_file" ]]; then
+        jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+    fi
+
+    # === 扫描并保存所有 OPENAI_ 开头的环境变量 ===
+    local saved_openai_vars=""
+    local var_name var_value
+    for var_name in ${(k)parameters}; do
+        if [[ "$var_name" == OPENAI_* ]]; then
+            var_value="${(P)var_name}"
+            saved_openai_vars+="$var_name=$var_value"$'\n'
+        fi
+    done
+
+    {
+        # === 清空所有 OPENAI_ 开头的环境变量 ===
+        for var_name in ${(k)parameters}; do
+            [[ "$var_name" == OPENAI_* ]] && unset "$var_name"
+        done
+
+        # === 设置 provider 环境变量 ===
+        while IFS='=' read -r key value; do
+            [[ -n "$key" ]] && export "$key=$value"
+        done <<< "$env_vars"
+
+        # === 显示切换信息 ===
+        echo "🔄 Switching到 Codex [$provider_name]..."
+        echo "📝 BASE_URL: $OPENAI_BASE_URL"
+        echo ""
+
+        # === 启动 Codex CLI ===
+        command codex exec "$@"
+    }
+
+    # === 恢复原始环境变量 ===
+    while IFS='=' read -r var_name var_value; do
+        [[ -n "$var_name" ]] && export "$var_name=$var_value"
+    done <<< "$saved_openai_vars"
+
+    # === 恢复 settings.json 中的 env 配置 ===
+    if [[ -f "$settings_file" && -n "$saved_env_json" ]]; then
+        jq --argjson env "$saved_env_json" '.env = $env' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+    fi
 }
 
 # === Claude 便捷调用函数 ===
