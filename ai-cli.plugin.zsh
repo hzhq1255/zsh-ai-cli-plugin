@@ -156,56 +156,37 @@ _ai_cli_launch_with_provider() {
 
     local settings_file="$HOME/.claude/settings.json"
 
-    # === 备份 settings.json 中的 env 配置 ===
-    local saved_env_json=""
+    # === 备份 settings.json 中的 env 配置（不恢复）===
     if [[ -f "$settings_file" ]]; then
-        saved_env_json=$(jq '.env // {}' "$settings_file" 2>/dev/null)
+        local env_check=$(jq '.env // {}' "$settings_file" 2>/dev/null)
+        # 只有当 env 非空时才备份并清空
+        if [[ "$env_check" != "{}" ]]; then
+            jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+        fi
     fi
 
-    # === 清空 settings.json 中的 env 配置（设置为空对象）===
-    if [[ -f "$settings_file" ]]; then
-        jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
-    fi
-
-    # === 扫描并保存所有 ANTHROPIC_ 开头的环境变量 ===
-    local saved_anthropic_vars=""
+    # === 检查并备份 ANTHROPIC_ 环境变量（不恢复）===
     local var_name var_value
     for var_name in ${(k)parameters}; do
         if [[ "$var_name" == ANTHROPIC_* ]]; then
             var_value="${(P)var_name}"
-            saved_anthropic_vars+="$var_name=$var_value"$'\n'
+            # 只备份有值的环境变量
+            [[ -n "$var_value" ]] && unset "$var_name"
         fi
     done
 
-    {
-        # === 清空所有 ANTHROPIC_ 开头的环境变量 ===
-        for var_name in ${(k)parameters}; do
-            [[ "$var_name" == ANTHROPIC_* ]] && unset "$var_name"
-        done
+    # === 设置 provider 环境变量 ===
+    while IFS='=' read -r key value; do
+        [[ -n "$key" ]] && export "$key=$value"
+    done <<< "$env_vars"
 
-        # === 设置 provider 环境变量 ===
-        while IFS='=' read -r key value; do
-            [[ -n "$key" ]] && export "$key=$value"
-        done <<< "$env_vars"
+    # === 显示切换信息 ===
+    echo "🔄 Switching to $provider_name..."
+    [[ "$app" == "claude" ]] && echo "📝 BASE_URL: $ANTHROPIC_BASE_URL"
+    echo ""
 
-        # === 显示切换信息 ===
-        echo "🔄 Switching to $provider_name..."
-        [[ "$app" == "claude" ]] && echo "📝 BASE_URL: $ANTHROPIC_BASE_URL"
-        echo ""
-
-        # === 启动 CLI ===
-        command claude "$@"
-    }
-
-    # === 恢复原始环境变量 ===
-    while IFS='=' read -r var_name var_value; do
-        [[ -n "$var_name" ]] && export "$var_name=$var_value"
-    done <<< "$saved_anthropic_vars"
-
-    # === 恢复 settings.json 中的 env 配置 ===
-    if [[ -f "$settings_file" && -n "$saved_env_json" ]]; then
-        jq --argjson env "$saved_env_json" '.env = $env' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
-    fi
+    # === 启动 CLI ===
+    command claude "$@"
 }
 
 # 设置 provider 环境变量并启动 Codex CLI（使用 -c 参数方式）
@@ -230,13 +211,25 @@ _ai_cli_launch_codex_with_provider() {
     # 解析 TOML 字段
     local model_provider=$(echo "$config_toml" | grep "^model_provider" | cut -d'=' -f2 | tr -d ' "')
     local model=$(echo "$config_toml" | grep "^model" | grep -v "model_provider" | grep -v "model_reasoning_effort" | cut -d'=' -f2 | tr -d ' "')
-    local base_url=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "base_url" | cut -d'=' -f2 | tr -d ' "')
+
+    # 解析 model_providers.custom 字段
+    local custom_name=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "^\s*name" | cut -d'=' -f2 | tr -d ' "')
+    local custom_wire_api=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "^\s*wire_api" | cut -d'=' -f2 | tr -d ' "')
+    local custom_requires_auth=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "^\s*requires_openai_auth" | cut -d'=' -f2 | tr -d ' "')
+    local base_url=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "^\s*base_url" | cut -d'=' -f2 | tr -d ' "')
 
     # 构建 -c 参数数组
     local -a config_args=()
     [[ -n "$model_provider" ]] && config_args+=("-c" "model_provider=\"$model_provider\"")
     [[ -n "$model" ]] && config_args+=("-c" "model=\"$model\"")
-    [[ -n "$base_url" ]] && config_args+=("-c" "model_providers.custom.base_url=\"$base_url\"")
+
+    # 只有当 model_provider 是 custom 时才添加这些字段
+    if [[ "$model_provider" == "custom" ]]; then
+        [[ -n "$custom_name" ]] && config_args+=("-c" "model_providers.custom.name=\"$custom_name\"")
+        [[ -n "$custom_wire_api" ]] && config_args+=("-c" "model_providers.custom.wire_api=\"$custom_wire_api\"")
+        [[ -n "$custom_requires_auth" ]] && config_args+=("-c" "model_providers.custom.requires_openai_auth=$custom_requires_auth")
+        [[ -n "$base_url" ]] && config_args+=("-c" "model_providers.custom.base_url=\"$base_url\"")
+    fi
 
     # 显示切换信息
     echo "🔄 Switching to Codex [$provider_name]..."
@@ -246,10 +239,10 @@ _ai_cli_launch_codex_with_provider() {
 
     # 执行 Codex CLI（子进程执行，不影响父 shell 环境）
     if [[ -n "$api_key" ]]; then
-        OPENAI_API_KEY="$api_key" command codex exec "${config_args[@]}" "$@"
+        env OPENAI_API_KEY="$api_key" codex exec "${config_args[@]}" "$@"
     else
         # OAuth 模式（如 OpenAI Official），不需要 API key
-        command codex exec "${config_args[@]}" "$@"
+        codex exec "${config_args[@]}" "$@"
     fi
 }
 
