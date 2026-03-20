@@ -80,6 +80,7 @@ _ai_cli_ensure_provider() {
 # 从 cc-switch config show 输出中提取指定 provider 的环境变量
 # 参数: $1 = provider_name, $2 = app (claude/codex)
 # 输出: key=value 格式的环境变量，每行一个
+# 对于 Codex，还会输出 __CONFIG_TOML__<<<EOF ... EOF 标记的 TOML 配置
 _ai_cli_get_provider_env() {
     local provider_name="$1"
     local app="${2:-claude}"
@@ -100,7 +101,7 @@ _ai_cli_get_provider_env() {
 
     # 使用单次 jq 调用提取环境变量，避免多行字符串解析问题
     # Claude: .settingsConfig.env (包含 BASE_URL)
-    # Codex: .settingsConfig.auth (API_KEY) + .meta.custom_endpoints (BASE_URL)
+    # Codex: .settingsConfig.auth (API_KEY) + .settingsConfig.config (TOML)
     local env_vars=$(jq -r --arg app "$app" --arg name "$provider_name" '
         .[$app].providers |
         to_entries[] |
@@ -111,25 +112,28 @@ _ai_cli_get_provider_env() {
             .settingsConfig |
             (.env // .auth // empty) |
             to_entries[] |
+            select(.key | IN("OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")) |
             "\(.key)=\(.value)"
-        ),
-        (
-            # 对于 Codex，从 custom_endpoints 提取 base_url
-            if $app == "codex" then
-                .meta.custom_endpoints // empty |
-                to_entries[0].value.url // empty |
-                if . != "null" and . != "" then
-                    "OPENAI_BASE_URL=\(.)"
-                else
-                    empty
-                end
-            else
-                empty
-            end
         )
     ' <<< "$config")
 
     echo "$env_vars"
+
+    # 对于 Codex，额外输出 config TOML
+    if [[ "$app" == "codex" ]]; then
+        local config_toml=$(jq -r --arg name "$provider_name" '
+            .codex.providers |
+            to_entries[] |
+            select(.value.name == $name) |
+            .value.settingsConfig.config // empty
+        ' <<< "$config")
+
+        if [[ -n "$config_toml" ]]; then
+            echo "__CONFIG_TOML__<<<EOF"
+            echo "$config_toml"
+            echo "EOF"
+        fi
+    fi
 }
 
 # 设置 provider 环境变量并启动 CLI（新方式，不使用 switch）
@@ -204,7 +208,7 @@ _ai_cli_launch_with_provider() {
     fi
 }
 
-# 设置 provider 环境变量并启动 Codex CLI
+# 设置 provider 环境变量并启动 Codex CLI（使用 -c 参数方式）
 # 参数: $1 = provider_name, $2.. = CLI 参数
 _ai_cli_launch_codex_with_provider() {
     local provider_name="$1"
@@ -213,65 +217,39 @@ _ai_cli_launch_codex_with_provider() {
     # 检查 provider 是否存在
     _ai_cli_ensure_provider "$provider_name" "codex" || return 1
 
-    # 获取环境变量
-    local env_vars=$(_ai_cli_get_provider_env "$provider_name" "codex")
+    # 获取环境变量和配置
+    local provider_config=$(_ai_cli_get_provider_env "$provider_name" "codex")
 
-    if [[ -z "$env_vars" ]]; then
-        echo "❌ 无法获取 provider '$provider_name' 的环境变量配置" >&2
-        return 1
-    fi
+    # 提取 OPENAI_API_KEY（null 值表示 OAuth 模式）
+    local api_key=$(echo "$provider_config" | grep "^OPENAI_API_KEY=" | cut -d'=' -f2-)
+    [[ "$api_key" == "null" ]] && api_key=""
 
-    local settings_file="$HOME/.claude/settings.json"
+    # 提取 config TOML
+    local config_toml=$(echo "$provider_config" | sed -n '/^__CONFIG_TOML__<<<EOF$/,/^EOF$/p' | sed '1d;$d')
 
-    # === 备份 settings.json 中的 env 配置 ===
-    local saved_env_json=""
-    if [[ -f "$settings_file" ]]; then
-        saved_env_json=$(jq '.env // {}' "$settings_file" 2>/dev/null)
-    fi
+    # 解析 TOML 字段
+    local model_provider=$(echo "$config_toml" | grep "^model_provider" | cut -d'=' -f2 | tr -d ' "')
+    local model=$(echo "$config_toml" | grep "^model" | grep -v "model_provider" | grep -v "model_reasoning_effort" | cut -d'=' -f2 | tr -d ' "')
+    local base_url=$(echo "$config_toml" | grep -A5 "model_providers.custom" | grep "base_url" | cut -d'=' -f2 | tr -d ' "')
 
-    # === 清空 settings.json 中的 env 配置（设置为空对象）===
-    if [[ -f "$settings_file" ]]; then
-        jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
-    fi
+    # 构建 -c 参数数组
+    local -a config_args=()
+    [[ -n "$model_provider" ]] && config_args+=("-c" "model_provider=\"$model_provider\"")
+    [[ -n "$model" ]] && config_args+=("-c" "model=\"$model\"")
+    [[ -n "$base_url" ]] && config_args+=("-c" "model_providers.custom.base_url=\"$base_url\"")
 
-    # === 扫描并保存所有 OPENAI_ 开头的环境变量 ===
-    local saved_openai_vars=""
-    local var_name var_value
-    for var_name in ${(k)parameters}; do
-        if [[ "$var_name" == OPENAI_* ]]; then
-            var_value="${(P)var_name}"
-            saved_openai_vars+="$var_name=$var_value"$'\n'
-        fi
-    done
+    # 显示切换信息
+    echo "🔄 Switching to Codex [$provider_name]..."
+    [[ -n "$base_url" ]] && echo "📝 BASE_URL: $base_url"
+    [[ -n "$model" ]] && echo "📝 MODEL: $model"
+    echo ""
 
-    {
-        # === 清空所有 OPENAI_ 开头的环境变量 ===
-        for var_name in ${(k)parameters}; do
-            [[ "$var_name" == OPENAI_* ]] && unset "$var_name"
-        done
-
-        # === 设置 provider 环境变量 ===
-        while IFS='=' read -r key value; do
-            [[ -n "$key" ]] && export "$key=$value"
-        done <<< "$env_vars"
-
-        # === 显示切换信息 ===
-        echo "🔄 Switching到 Codex [$provider_name]..."
-        echo "📝 BASE_URL: $OPENAI_BASE_URL"
-        echo ""
-
-        # === 启动 Codex CLI ===
-        command codex exec "$@"
-    }
-
-    # === 恢复原始环境变量 ===
-    while IFS='=' read -r var_name var_value; do
-        [[ -n "$var_name" ]] && export "$var_name=$var_value"
-    done <<< "$saved_openai_vars"
-
-    # === 恢复 settings.json 中的 env 配置 ===
-    if [[ -f "$settings_file" && -n "$saved_env_json" ]]; then
-        jq --argjson env "$saved_env_json" '.env = $env' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+    # 执行 Codex CLI（子进程执行，不影响父 shell 环境）
+    if [[ -n "$api_key" ]]; then
+        OPENAI_API_KEY="$api_key" command codex exec "${config_args[@]}" "$@"
+    else
+        # OAuth 模式（如 OpenAI Official），不需要 API key
+        command codex exec "${config_args[@]}" "$@"
     fi
 }
 
