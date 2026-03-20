@@ -239,7 +239,9 @@ _ai_cli_launch_codex_with_provider() {
 
     # 执行 Codex CLI（子进程执行，不影响父 shell 环境）
     if [[ -n "$api_key" ]]; then
-        env OPENAI_API_KEY="$api_key" codex exec "${config_args[@]}" "$@"
+        export OPENAI_API_KEY="$api_key"
+        codex exec "${config_args[@]}" "$@"
+        unset OPENAI_API_KEY
     else
         # OAuth 模式（如 OpenAI Official），不需要 API key
         codex exec "${config_args[@]}" "$@"
