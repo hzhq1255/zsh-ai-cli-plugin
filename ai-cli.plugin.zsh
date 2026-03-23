@@ -289,6 +289,10 @@ function codex-openai() {
     _ai_cli_launch_codex_with_provider "OpenAI Official" "$@"
 }
 
+function codex-wj() {
+    _ai_cli_launch_codex_with_provider "万界方舟" "$@"
+}
+
 # === 未配置的函数（占位符，需要先在 cc-switch 中配置）===
 # function kimi() { cc-switch provider switch Kimi; command claude "$@"; }
 # function ccr-code() { cc-switch provider switch CCR; command claude "$@"; }
