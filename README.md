@@ -14,6 +14,7 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `minimaxi` | MiniMax AI | claude |
 | `hybgzs` | 黑与白 | claude |
 | `nvidia` | Nvidia | claude |
+| `ccwj` | 万界方舟 | claude |
 | `codex-cpa` | Codex CPA | codex |
 | `codex-hyb` | 黑与白 | codex |
 | `codex-openai` | OpenAI Official | codex |
@@ -84,6 +85,7 @@ ccs provider add
 | MiniMax | `https://api.minimax.chat/v1` | `abab6.5s-chat` |
 | 黑与白 | `https://heiyu.com/v1` | `claude-3-5-sonnet` |
 | Nvidia | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.1-405b-instruct` |
+| 万界方舟 | (按你的 cc-switch 配置) | (按你的 cc-switch 配置) |
 
 **Codex provider 配置** (通过 cc-switch 的 codex app 管理):
 
@@ -126,6 +128,9 @@ deepseek "解释这段代码"
 
 # 使用 Nvidia
 nvidia --version
+
+# 使用万界方舟 Claude
+ccwj "介绍一下你自己"
 
 # 使用 Codex
 codex-cpa "生成一个 REST API"

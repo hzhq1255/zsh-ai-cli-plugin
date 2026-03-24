@@ -206,6 +206,7 @@ modelscope() { _ai_cli_run_claude 'ModelScope' "$@"; }
 minimaxi() { _ai_cli_run_claude 'MiniMax' "$@"; }
 hybgzs() { _ai_cli_run_claude '黑与白' "$@"; }
 nvidia() { _ai_cli_run_claude 'Nvidia' "$@"; }
+ccwj() { _ai_cli_run_claude '万界方舟' "$@"; }
 
 codex-cpa() { _ai_cli_run_codex 'CPA' "$@"; }
 codex-hyb() { _ai_cli_run_codex '黑与白' "$@"; }

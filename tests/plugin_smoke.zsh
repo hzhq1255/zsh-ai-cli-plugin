@@ -47,6 +47,16 @@ cat >"$AI_CLI_TEST_CONFIG" <<'EOF'
             "ANTHROPIC_MODEL": "deepseek-chat"
           }
         }
+      },
+      "claude-2": {
+        "name": "万界方舟",
+        "settingsConfig": {
+          "env": {
+            "ANTHROPIC_AUTH_TOKEN": "ccwj-token",
+            "ANTHROPIC_BASE_URL": "https://wj.example.com/anthropic",
+            "ANTHROPIC_MODEL": "wanjie-claude"
+          }
+        }
       }
     }
   },
@@ -188,6 +198,11 @@ assert_contains "$claude_output" "ANTHROPIC_BASE_URL=https://api.deepseek.com/an
 assert_contains "$claude_output" "SETTING_SOURCES=project,local"
 assert_contains "$claude_output" "SETTINGS_FILE=/"
 assert_contains "$claude_output" 'SETTINGS_ENV={}'
+
+ccwj_output=$(ccwj "hello")
+assert_contains "$ccwj_output" "CLI=claude"
+assert_contains "$ccwj_output" "ANTHROPIC_AUTH_TOKEN=ccwj-token"
+assert_contains "$ccwj_output" "ANTHROPIC_BASE_URL=https://wj.example.com/anthropic"
 
 codex_custom_output=$(codex-hyb "ship it")
 assert_contains "$codex_custom_output" "CLI=codex"
