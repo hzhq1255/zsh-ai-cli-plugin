@@ -127,7 +127,7 @@ _ai_cli_run_claude() {
   env_tsv=$(jq -r '.settingsConfig.env // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv' <<<"$provider_json")
   [[ -n "$env_tsv" ]] || _ai_cli_die "provider '$provider_name' does not define Claude env settings" || return 1
 
-  settings_file=$(mktemp "${TMPDIR:-/tmp}/ai-cli-claude-settings.XXXXXX.json") || return 1
+  settings_file=$(mktemp "${TMPDIR:-/tmp}/ai-cli-claude-settings.XXXXXX") || return 1
   real_settings="$HOME/.claude/settings.json"
 
   (
