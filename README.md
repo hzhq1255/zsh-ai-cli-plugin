@@ -17,22 +17,24 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `codex-cpa` | Codex CPA | codex |
 | `codex-hyb` | 黑与白 | codex |
 | `codex-openai` | OpenAI Official | codex |
+| `codex-wj` | 万界方舟 | codex |
 
 ## 依赖
 
 - [cc-switch-cli](https://github.com/SaladDay/cc-switch-cli) - AI 提供商切换工具
 - [claude-code](https://github.com/anthropics/claude-code) - Claude CLI
-- [codex-cli](https://github.com/example/codex) - Codex CLI (可选)
-- [jq](https://stedolan.github.io/jq/) - JSON 处理工具（解析配置）
+- Codex CLI
+- [jq](https://stedolan.github.io/jq/) - JSON 处理工具（解析 cc-switch 配置）
+- [yj](https://github.com/sclevine/yj) - TOML/JSON 转换工具（解析 Codex provider 配置）
 
-安装 jq：
+安装 jq 和 yj：
 ```bash
 # macOS
-brew install jq
+brew install jq yj
 
 # Linux
-sudo apt-get install jq  # Debian/Ubuntu
-sudo yum install jq      # CentOS/RHEL
+sudo apt-get install jq yj  # Debian/Ubuntu
+sudo yum install jq yj      # CentOS/RHEL
 ```
 
 ## 安装
@@ -90,15 +92,16 @@ ccs provider add
 | CPA | `https://cliproxyapi.hzhq1255.work` | `gpt-5.4` |
 | 黑与白 | `https://ai.hybgzs.com/v1` | `gpt-5.4` |
 | OpenAI Official | (官方默认) | (官方默认) |
+| 万界方舟 | (按你的 cc-switch 配置) | (按你的 cc-switch 配置) |
 
 ### 5. 验证配置
 
 ```bash
-# 列出所有已配置的 providers
-ccs provider list
+# 列出 Claude providers
+ccs -a claude provider list
 
-# 查看当前使用的 provider
-ccs provider current
+# 列出 Codex providers
+ccs -a codex provider list
 
 # 验证配置是否有效
 ccs config validate
@@ -129,46 +132,57 @@ codex-cpa "生成一个 REST API"
 
 # 使用 OpenAI 官方 Codex
 codex-openai "生成一个 REST API"
+
+# 使用万界方舟 Codex
+codex-wj "重构这个 shell 插件"
 ```
 
 ### 查看/管理 Provider
 
 ```bash
-# 查看当前 provider
-ccs provider current
+# 列出 Claude providers
+ccs -a claude provider list
 
-# 列出所有 providers
-ccs provider list
+# 列出 Codex providers
+ccs -a codex provider list
 
-# 切换 provider
-ccs provider switch DeepSeek
+# 打开交互式管理界面
+ccs
 ```
 
 ## 实现原理
 
-本插件采用**环境变量注入**方式，而非传统的 provider 切换方式：
+本插件采用**显式 CLI 参数 + 环境变量注入**方式，而非传统的 provider 切换方式：
 
 ### 传统方式 vs 本插件
 
-| 特性 | 传统 switch 方式 | 环境变量注入方式 |
+| 特性 | 传统 switch 方式 | 本插件实现 |
 |------|-----------------|-----------------|
 | 实现原理 | 调用 `cc-switch provider switch` | 直接从配置读取环境变量 |
 | 隔离性 | 全局状态，影响所有 session | 每次调用独立，无副作用 |
-| 故障转移 | 需手动切换 | 自动读取配置，支持故障转移 |
-| 配置结构 | 仅支持 `.env` 字段 | 支持 `.env` 和 `.auth` 字段 |
+| 配置来源 | 当前激活 provider | `cc-switch config show` 中对应 provider |
+| 配置结构 | 仅支持 switch | Claude 用 `.env`，Codex 用 `.auth + .config(TOML)` |
+| CLI 契约 | 依赖全局当前状态 | Claude 用 `--settings`，Codex 用 `-c` 覆盖 provider 相关配置 |
 
 ### 核心函数
 
-- `_ai_cli_get_provider_env`: 从 cc-switch 配置提取环境变量
-  - Claude: 读取 `.settingsConfig.env`
-  - Codex: 读取 `.settingsConfig.auth` + `.meta.custom_endpoints`
-- `_ai_cli_launch_with_provider`: 设置环境变量并启动 Claude CLI
-- `_ai_cli_launch_codex_with_provider`: 设置环境变量并启动 Codex CLI
+- `_ai_cli_get_config_json`: 读取并解析 `cc-switch config show`
+- `_ai_cli_run_claude`: 基于当前 `~/.claude/settings.json` 生成临时 settings 文件，清空 `.env` 后通过 `--settings` 启动 Claude
+- `_ai_cli_run_codex`: 保留 `~/.codex/auth.json`，将 provider 的 TOML 配置展开为多组 `-c key=value` 参数，并按需覆盖 `model_provider` 对应的 `env_key`
 
 ```bash
-# 等价于手动设置环境变量并调用 CLI
-env ANTHROPIC_AUTH_TOKEN=xxx ANTHROPIC_BASE_URL=xxx command claude "$@"
-env OPENAI_API_KEY=xxx OPENAI_BASE_URL=xxx command codex "$@"
+# Claude: 使用显式 settings 文件和 provider 环境变量
+ANTHROPIC_AUTH_TOKEN=xxx \
+ANTHROPIC_BASE_URL=xxx \
+claude --setting-sources project,local --settings /tmp/ai-cli-settings.json "$@"
+
+# Codex: 保留 ~/.codex/auth.json，只覆盖 provider 配置
+HYB_API_KEY=xxx \
+codex \
+  -c 'model_provider="custom"' \
+  -c 'model_providers.custom.base_url="https://ai.hybgzs.com/v1"' \
+  -c 'model_providers.custom.env_key="HYB_API_KEY"' \
+  "$@"
 ```
 
 ## 别名

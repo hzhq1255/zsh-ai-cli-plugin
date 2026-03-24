@@ -72,6 +72,9 @@ _ai_cli_clear_claude_env() {
 _ai_cli_clear_codex_env() {
   unset OPENAI_API_KEY
   unset OPENAI_BASE_URL
+  unset HYB_API_KEY
+  unset WJ_API_KEY
+  unset CPA_API_KEY
 }
 
 _ai_cli_codex_config_args() {
@@ -94,6 +97,17 @@ _ai_cli_codex_config_args() {
     | [$path | map(key_part) | join("."), ($value | tojson)]
     | @tsv
   '
+}
+
+_ai_cli_codex_env_key() {
+  local provider_name="$1"
+
+  case "$provider_name" in
+    '黑与白') print -r -- 'HYB_API_KEY' ;;
+    '万界方舟') print -r -- 'WJ_API_KEY' ;;
+    'CPA') print -r -- 'CPA_API_KEY' ;;
+    *) print -r -- 'OPENAI_API_KEY' ;;
+  esac
 }
 
 _ai_cli_run_claude() {
@@ -143,7 +157,7 @@ _ai_cli_run_codex() {
   local provider_name="$1"
   shift
 
-  local config_json provider_json auth_json config_toml api_key
+  local config_json provider_json auth_json config_toml api_key model_provider env_key
   local -a config_args
 
   _ai_cli_require_commands cc-switch jq yj codex || return 1
@@ -157,6 +171,10 @@ _ai_cli_run_codex() {
   auth_json=$(jq -c '.settingsConfig.auth // {}' <<<"$provider_json")
   config_toml=$(jq -r '.settingsConfig.config // ""' <<<"$provider_json")
   [[ -n "$config_toml" ]] || _ai_cli_die "provider '$provider_name' does not define Codex config" || return 1
+  model_provider=$(printf '%s\n' "$config_toml" | yj -tj | jq -r '.model_provider // empty') || {
+    _ai_cli_die "failed to parse provider codex model_provider"
+    return 1
+  }
 
   while IFS=$'\t' read -r key value; do
     [[ -n "$key" ]] && config_args+=(-c "$key=$value")
@@ -166,12 +184,16 @@ _ai_cli_run_codex() {
   }
 
   api_key=$(jq -r '.OPENAI_API_KEY // empty' <<<"$auth_json")
+  env_key=$(_ai_cli_codex_env_key "$provider_name")
 
   (
     _ai_cli_clear_codex_env
 
     if [[ -n "$api_key" && "$api_key" != "null" ]]; then
-      export OPENAI_API_KEY="$api_key"
+      export "$env_key=$api_key"
+      if [[ -n "$model_provider" ]]; then
+        config_args+=(-c "model_providers.${model_provider}.env_key=\"$env_key\"")
+      fi
     fi
 
     command codex "${config_args[@]}" "$@"
