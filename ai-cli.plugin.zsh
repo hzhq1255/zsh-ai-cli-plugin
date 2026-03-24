@@ -1,234 +1,191 @@
-# ai-cli plugin - AI CLI 工具快捷封装
-# 依赖: cc-switch-cli (https://github.com/SaladDay/cc-switch-cli)
-
-# === 基础别名 ===
 alias ccs='cc-switch'
 
-# cc-switch 包装函数：惰性依赖检查
-# 使用此函数替代直接调用 cc-switch 命令
-_cc_switch() {
-    if ! command -v cc-switch &>/dev/null; then
-        echo "❌ 未安装 cc-switch" >&2
-        echo "请执行: curl -fsSL https://github.com/SaladDay/cc-switch-cli/releases/latest/download/install.sh | bash" >&2
+_ai_cli_die() {
+  print -u2 -- "ai-cli: $*"
+  return 1
+}
+
+_ai_cli_require_commands() {
+  local cmd
+
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 && continue
+
+    case "$cmd" in
+      cc-switch) _ai_cli_die 'missing required command: cc-switch\nInstall cc-switch: curl -fsSL https://github.com/SaladDay/cc-switch-cli/releases/latest/download/install.sh | bash' ;;
+      jq) _ai_cli_die 'missing required command: jq\nInstall jq: brew install jq' ;;
+      yj) _ai_cli_die 'missing required command: yj\nInstall yj: brew install yj' ;;
+      claude) _ai_cli_die 'missing required command: claude' ;;
+      codex) _ai_cli_die 'missing required command: codex' ;;
+      *) _ai_cli_die "missing required command: $cmd" ;;
+    esac
+    return 1
+  done
+}
+
+_ai_cli_config_json() {
+  local output json
+
+  if ! output=$(command cc-switch config show 2>&1); then
+    _ai_cli_die "failed to read cc-switch config"
+    [[ -n "$output" ]] && print -u2 -- "$output"
+    return 1
+  fi
+
+  json=$(printf '%s\n' "$output" | sed -n '/^{/,$p')
+  [[ -n "$json" ]] || _ai_cli_die "cc-switch config output did not contain JSON" || return 1
+  jq -e . >/dev/null 2>&1 <<<"$json" || _ai_cli_die "failed to parse cc-switch config JSON" || return 1
+  print -r -- "$json"
+}
+
+_ai_cli_provider_json() {
+  local config_json="$1"
+  local app="$2"
+  local provider_name="$3"
+
+  jq -ec \
+    --arg app "$app" \
+    --arg name "$provider_name" \
+    '.[$app].providers // {} | to_entries[] | .value | select(.name == $name)' \
+    <<<"$config_json"
+}
+
+_ai_cli_missing_provider() {
+  local app="$1"
+  local provider_name="$2"
+
+  _ai_cli_die "provider '$provider_name' is not configured for $app"
+  print -u2 -- "List providers: ccs -a $app provider list"
+  print -u2 -- "Add providers: ccs"
+  return 1
+}
+
+_ai_cli_clear_claude_env() {
+  unset ANTHROPIC_AUTH_TOKEN
+  unset ANTHROPIC_BASE_URL
+  unset ANTHROPIC_MODEL
+  unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+  unset ANTHROPIC_DEFAULT_OPUS_MODEL
+  unset ANTHROPIC_DEFAULT_SONNET_MODEL
+}
+
+_ai_cli_clear_codex_env() {
+  unset OPENAI_API_KEY
+  unset OPENAI_BASE_URL
+}
+
+_ai_cli_codex_config_args() {
+  local config_toml="$1"
+
+  printf '%s\n' "$config_toml" | yj -tj | jq -r '
+    def key_part:
+      if type == "number" then tostring
+      elif test("^[A-Za-z0-9_-]+$") then .
+      else @json
+      end;
+
+    . as $doc
+    | paths as $path
+    | ($doc | getpath($path)) as $value
+    | select(($path[0] // "") != "projects")
+    | select(($path[0] // "") != "notice")
+    | select(($value | type) != "object")
+    | select((($path | length) == 0) or (($path[-1] | type) != "number"))
+    | [$path | map(key_part) | join("."), ($value | tojson)]
+    | @tsv
+  '
+}
+
+_ai_cli_run_claude() {
+  local provider_name="$1"
+  shift
+
+  local config_json provider_json env_tsv settings_file real_settings
+
+  _ai_cli_require_commands cc-switch jq claude || return 1
+
+  config_json=$(_ai_cli_config_json) || return 1
+  provider_json=$(_ai_cli_provider_json "$config_json" claude "$provider_name") || {
+    _ai_cli_missing_provider claude "$provider_name"
+    return 1
+  }
+
+  env_tsv=$(jq -r '.settingsConfig.env // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv' <<<"$provider_json")
+  [[ -n "$env_tsv" ]] || _ai_cli_die "provider '$provider_name' does not define Claude env settings" || return 1
+
+  settings_file=$(mktemp "${TMPDIR:-/tmp}/ai-cli-claude-settings.XXXXXX.json") || return 1
+  real_settings="$HOME/.claude/settings.json"
+
+  (
+    trap 'rm -f -- "$settings_file"' EXIT INT TERM
+
+    if [[ -f "$real_settings" ]]; then
+      jq '.env = {}' "$real_settings" >"$settings_file" || {
+        _ai_cli_die "failed to sanitize ~/.claude/settings.json"
         return 1
-    fi
-    command cc-switch "$@"
-}
-
-# === Provider 检测辅助函数 ===
-
-# 获取指定 provider 名称的 ID
-# 参数: $1 = provider_name, $2 = app (默认 claude)
-# 输出: provider ID 或空字符串
-_ai_cli_get_provider_id() {
-    local provider_name="$1"
-    local app="${2:-claude}"
-
-    # 从表格中精确匹配 provider 名称并提取其 UUID
-    # 表格格式: ┆ UUID ┆ Name ┆ API URL
-    # 使用 awk 进行精确匹配，忽略表格边框字符
-    _cc_switch -a "$app" provider list 2>/dev/null | \
-        awk -v name="$provider_name" '
-        BEGIN { found=0; id="" }
-        {
-            # 查找包含 UUID 格式的行
-            if (match($0, /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)) {
-                id = substr($0, RSTART, RLENGTH)
-                # 检查该行是否包含目标 provider 名称
-                # 注意：provider 名称可能在 UUID 之后出现
-                if (index($0, name) > 0) {
-                    print id
-                    found = 1
-                    exit
-                }
-            }
-        }
-        END { if (!found) print "" }
-    '
-}
-
-# 检测指定的 provider 是否已配置
-# 参数: $1 = provider_name, $2 = app (默认 claude)
-# 返回: 0 = 已配置, 1 = 未配置
-_ai_cli_check_provider() {
-    local provider_name="$1"
-    local app="${2:-claude}"
-
-    [[ -n "$(_ai_cli_get_provider_id "$provider_name" "$app")" ]]
-}
-
-# Provider 检测和配置引导
-# 参数: $1 = provider_name, $2 = app (默认 claude)
-_ai_cli_ensure_provider() {
-    local provider_name="$1"
-    local app="${2:-claude}"
-
-    if ! _ai_cli_check_provider "$provider_name" "$app"; then
-        echo "⚠️  Provider '$provider_name' 未配置"
-        echo ""
-        echo "请先配置 provider:"
-        echo "  运行: ccs"
-        echo "  然后: provider -> add -> 添加 '$provider_name'"
-        echo ""
-        return 1
-    fi
-    return 0
-}
-
-# === Provider 环境变量提取函数 ===
-
-# 从 cc-switch config show 输出中提取指定 provider 的环境变量
-# 参数: $1 = provider_name, $2 = app (claude/codex)
-# 输出: key=value 格式的环境变量，每行一个
-# 对于 Codex，还会输出 __CONFIG_TOML__<<<EOF ... EOF 标记的 TOML 配置
-_ai_cli_get_provider_env() {
-    local provider_name="$1"
-    local app="${2:-claude}"
-
-    # 检查 jq 是否可用（惰性检查，不阻塞 shell）
-    if ! command -v jq &>/dev/null; then
-        echo "❌ 未安装 jq，请执行: brew install jq" >&2
-        return 1
+      }
+    else
+      print -r -- '{"env":{}}' >"$settings_file"
     fi
 
-    # 获取完整配置 JSON
-    local config=$(_cc_switch config show 2>/dev/null | sed -n '/^{/,$p')
+    _ai_cli_clear_claude_env
 
-    if [[ -z "$config" ]]; then
-        echo "❌ 无法获取 cc-switch 配置" >&2
-        return 1
+    local key value
+    while IFS=$'\t' read -r key value; do
+      [[ -n "$key" ]] && export "$key=$value"
+    done <<<"$env_tsv"
+
+    command claude --setting-sources project,local --settings "$settings_file" "$@"
+  )
+}
+
+_ai_cli_run_codex() {
+  local provider_name="$1"
+  shift
+
+  local config_json provider_json auth_json config_toml api_key
+  local -a config_args
+
+  _ai_cli_require_commands cc-switch jq yj codex || return 1
+
+  config_json=$(_ai_cli_config_json) || return 1
+  provider_json=$(_ai_cli_provider_json "$config_json" codex "$provider_name") || {
+    _ai_cli_missing_provider codex "$provider_name"
+    return 1
+  }
+
+  auth_json=$(jq -c '.settingsConfig.auth // {}' <<<"$provider_json")
+  config_toml=$(jq -r '.settingsConfig.config // ""' <<<"$provider_json")
+  [[ -n "$config_toml" ]] || _ai_cli_die "provider '$provider_name' does not define Codex config" || return 1
+
+  while IFS=$'\t' read -r key value; do
+    [[ -n "$key" ]] && config_args+=(-c "$key=$value")
+  done <<<"$(_ai_cli_codex_config_args "$config_toml")" || {
+    _ai_cli_die "failed to parse provider codex config TOML"
+    return 1
+  }
+
+  api_key=$(jq -r '.OPENAI_API_KEY // empty' <<<"$auth_json")
+
+  (
+    _ai_cli_clear_codex_env
+
+    if [[ -n "$api_key" && "$api_key" != "null" ]]; then
+      export OPENAI_API_KEY="$api_key"
     fi
 
-    # 使用单次 jq 调用提取环境变量，避免多行字符串解析问题
-    # Claude: .settingsConfig.env (包含 BASE_URL)
-    # Codex: .settingsConfig.auth (API_KEY) + .settingsConfig.config (TOML)
-    local env_vars=$(jq -r --arg app "$app" --arg name "$provider_name" '
-        .[$app].providers |
-        to_entries[] |
-        select(.value.name == $name) |
-        .value |
-        (
-            # 提取 auth/env 中的环境变量
-            .settingsConfig |
-            (.env // .auth // empty) |
-            to_entries[] |
-            select(.key | IN("OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")) |
-            "\(.key)=\(.value)"
-        )
-    ' <<< "$config")
-
-    echo "$env_vars"
-
-    # 对于 Codex，额外输出 config TOML
-    if [[ "$app" == "codex" ]]; then
-        local config_toml=$(jq -r --arg name "$provider_name" '
-            .codex.providers |
-            to_entries[] |
-            select(.value.name == $name) |
-            .value.settingsConfig.config // empty
-        ' <<< "$config")
-
-        if [[ -n "$config_toml" ]]; then
-            echo "__CONFIG_TOML__<<<EOF"
-            echo "$config_toml"
-            echo "EOF"
-        fi
-    fi
+    command codex "${config_args[@]}" "$@"
+  )
 }
 
-# 设置 provider 环境变量并启动 CLI（新方式，不使用 switch）
-# 参数: $1 = provider_name, $2 = app (claude), $3.. = CLI 参数
-_ai_cli_launch_with_provider() {
-    local provider_name="$1"
-    local app="${2:-claude}"
-    shift 2  # 移除前两个参数，剩余为 CLI 参数
+deepseek() { _ai_cli_run_claude 'DeepSeek' "$@"; }
+glm() { _ai_cli_run_claude 'Zhipu GLM' "$@"; }
+modelscope() { _ai_cli_run_claude 'ModelScope' "$@"; }
+minimaxi() { _ai_cli_run_claude 'MiniMax' "$@"; }
+hybgzs() { _ai_cli_run_claude '黑与白' "$@"; }
+nvidia() { _ai_cli_run_claude 'Nvidia' "$@"; }
 
-    # 检查 provider 是否存在
-    _ai_cli_ensure_provider "$provider_name" "$app" || return 1
-
-    # 获取环境变量
-    local env_vars=$(_ai_cli_get_provider_env "$provider_name" "$app")
-
-    if [[ -z "$env_vars" ]]; then
-        echo "❌ 无法获取 provider '$provider_name' 的环境变量配置" >&2
-        return 1
-    fi
-
-    local settings_file="$HOME/.claude/settings.json"
-
-    # === 备份 settings.json 中的 env 配置（不恢复）===
-    if [[ -f "$settings_file" ]]; then
-        local env_check=$(jq '.env // {}' "$settings_file" 2>/dev/null)
-        # 只有当 env 非空时才备份并清空
-        if [[ "$env_check" != "{}" ]]; then
-            jq '.env = {}' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
-        fi
-    fi
-
-    # === 检查并备份 ANTHROPIC_ 环境变量（不恢复）===
-    local var_name var_value
-    for var_name in ${(k)parameters}; do
-        if [[ "$var_name" == ANTHROPIC_* ]]; then
-            var_value="${(P)var_name}"
-            # 只备份有值的环境变量
-            [[ -n "$var_value" ]] && unset "$var_name"
-        fi
-    done
-
-    # === 设置 provider 环境变量 ===
-    while IFS='=' read -r key value; do
-        [[ -n "$key" ]] && export "$key=$value"
-    done <<< "$env_vars"
-
-    # === 显示切换信息 ===
-    echo "🔄 Switching to $provider_name..."
-    [[ "$app" == "claude" ]] && echo "📝 BASE_URL: $ANTHROPIC_BASE_URL"
-    echo ""
-
-    # === 启动 CLI ===
-    command claude "$@"
-}
-
-# === Claude 便捷调用函数 ===
-# 注意：使用新方式，直接从配置读取环境变量，不调用 switch
-# 这样可以实现 session 级别隔离，并支持 cc-switch 的故障转移功能
-
-function deepseek() {
-    _ai_cli_launch_with_provider "DeepSeek" "claude" "$@"
-}
-
-function glm() {
-    _ai_cli_launch_with_provider "Zhipu GLM" "claude" "$@"
-}
-
-function modelscope() {
-    _ai_cli_launch_with_provider "ModelScope" "claude" "$@"
-}
-
-function minimaxi() {
-    _ai_cli_launch_with_provider "MiniMax" "claude" "$@"
-}
-
-function hybgzs() {
-    _ai_cli_launch_with_provider "黑与白" "claude" "$@"
-}
-
-function nvidia() {
-    _ai_cli_launch_with_provider "Nvidia" "claude" "$@"
-}
-
-# === Codex 别名 ===
-# 直接使用 codex exec -c 方式切换 provider
-
-alias codex-cpa='codex exec -c model_provider="CPA"'
-alias codex-hyb='codex exec -c model_provider="黑与白"'
-alias codex-openai='codex exec'
-alias codex-wj='codex exec -c model_provider="万界方舟"'
-
-# === 未配置的函数（占位符，需要先在 cc-switch 中配置）===
-# function kimi() { cc-switch provider switch Kimi; command claude "$@"; }
-# function ccr-code() { cc-switch provider switch CCR; command claude "$@"; }
-# function gemini() { cc-switch -a gemini provider switch default; command gemini "$@"; }
-
-# 惰性加载 completions，不阻塞插件加载
-command -v cc-switch &>/dev/null && source <(cc-switch completions zsh 2>/dev/null) || true 
+codex-cpa() { _ai_cli_run_codex 'CPA' "$@"; }
+codex-hyb() { _ai_cli_run_codex '黑与白' "$@"; }
+codex-openai() { _ai_cli_run_codex 'OpenAI Official' "$@"; }
+codex-wj() { _ai_cli_run_codex '万界方舟' "$@"; }
