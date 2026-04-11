@@ -149,7 +149,7 @@ _ai_cli_run_claude() {
       [[ -n "$key" ]] && export "$key=$value"
     done <<<"$env_tsv"
 
-    command claude --setting-sources project,local --settings "$settings_file" "$@"
+    command claude --settings "$settings_file" "$@"
   )
 }
 
