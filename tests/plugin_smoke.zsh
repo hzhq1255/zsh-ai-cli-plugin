@@ -74,7 +74,21 @@ cat >"$AI_CLI_TEST_CONFIG" <<'EOF'
           "auth": {
             "OPENAI_API_KEY": "deepseek-key"
           },
-          "config": "model_provider = \"custom\"\nmodel = \"gpt-5.6\"\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://api.deepseek.com\"\n"
+          "config": "model_provider = \"custom\"\nmodel = \"gpt-5.6\"\nmodel_reasoning_effort = \"high\"\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://api.deepseek.com\"\n",
+          "modelCatalog": {
+            "models": [
+              {
+                "model": "deepseek-v4-flash",
+                "displayName": "DeepSeek V4 Flash",
+                "contextWindow": 1048576
+              },
+              {
+                "model": "deepseek-v4-pro",
+                "displayName": "DeepSeek V4 Pro",
+                "contextWindow": 1048576
+              }
+            ]
+          }
         }
       },
       "official-id": {
@@ -265,6 +279,7 @@ assert_contains "$codex_hyb_output" "ARG_COUNT=3"
 assert_contains "$codex_hyb_output" "ARG_1=--model"
 assert_contains "$codex_hyb_output" "ARG_2=gpt-5.4"
 assert_contains "$codex_hyb_output" "ARG_3=start shared session"
+assert_not_contains "$codex_hyb_output" "model_catalog_json ="
 assert_file_contains "$CODEX_HOME/hyb-id.config.toml" 'base_url = "https://ai.hybgzs.com/v1"'
 assert_file_contains "$CODEX_HOME/hyb-id.config.toml" "requires_openai_auth = false"
 assert_file_contains "$CODEX_HOME/hyb-id.config.toml" 'env_key = "CUSTOM_API_KEY"'
@@ -295,10 +310,46 @@ assert_contains "$codex_ds_output" "CUSTOM_API_KEY=deepseek-key"
 assert_contains "$codex_ds_output" "requires_openai_auth = false"
 assert_contains "$codex_ds_output" 'env_key = "CUSTOM_API_KEY"'
 assert_contains "$codex_ds_output" 'base_url = "https://api.deepseek.com"'
+assert_contains "$codex_ds_output" 'model_catalog_json = "deepseek-id.model_catalog.json"'
+assert_contains "$codex_ds_output" 'model = "deepseek-v4-flash"'
+assert_contains "$codex_ds_output" 'model_reasoning_effort = "high"'
 assert_contains "$codex_ds_output" "ARG_1=mcp"
 assert_contains "$codex_ds_output" "ARG_2=list"
 assert_file_contains "$CODEX_HOME/deepseek-id.config.toml" 'base_url = "https://api.deepseek.com"'
 assert_file_contains "$CODEX_HOME/deepseek-id.config.toml" 'env_key = "CUSTOM_API_KEY"'
+assert_file_contains "$CODEX_HOME/deepseek-id.config.toml" 'model_catalog_json = "deepseek-id.model_catalog.json"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"model": "deepseek-v4-flash"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"slug": "deepseek-v4-flash"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"display_name": "DeepSeek V4 Flash"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"context_window": 1048576'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"model": "deepseek-v4-pro"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "low"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "high"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "max"'
+assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"default_reasoning_level": "high"'
+
+deepseek_catalog_json=$(<"$CODEX_HOME/deepseek-id.model_catalog.json")
+saved_deepseek_selection=$(_ai_cli_codex_model_catalog_selection \
+  "$deepseek_catalog_json" \
+  "deepseek-v4-pro" \
+  "max" \
+  "high")
+assert_contains "$saved_deepseek_selection" '"model":"deepseek-v4-pro"'
+assert_contains "$saved_deepseek_selection" '"reasoning_effort":"max"'
+
+selection_profile=$(_ai_cli_prepare_codex_model_selection_profile \
+  'model_provider = "custom"
+model = "gpt-5.6"
+model_reasoning_effort = "high"
+[model_providers.custom]' \
+  "deepseek-v4-pro" \
+  "max")
+assert_contains "$selection_profile" 'model = "deepseek-v4-pro"'
+assert_contains "$selection_profile" 'model_reasoning_effort = "max"'
+
+invalid_context_catalog='{"provider":{"settingsConfig":{"modelCatalog":{"models":[{"model":"fallback-model","displayName":"Fallback Model","contextWindow":"not-a-number"}]}}}}'
+invalid_context_output=$(_ai_cli_codex_model_catalog_json "$invalid_context_catalog")
+assert_contains "$invalid_context_output" '"context_window": 262144'
 
 codex_official_output=$(codex-openai resume "019fd0c7-9ced-7732-b365-c429ce57e706")
 assert_contains "$codex_official_output" "CODEX_HOME=$CODEX_HOME"

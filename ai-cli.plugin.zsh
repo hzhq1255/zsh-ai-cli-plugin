@@ -227,6 +227,328 @@ _ai_cli_prepare_codex_env_profile() {
   '
 }
 
+_ai_cli_codex_top_level_string_value() {
+  local config_toml="$1"
+  local key="$2"
+
+  printf '%s\n' "$config_toml" | awk -v key="$key" '
+    /^[[:space:]]*\[/ {
+      exit
+    }
+
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      value = $0
+      sub(/^[^"]*"/, "", value)
+      sub(/".*$/, "", value)
+      print value
+      exit
+    }
+  ' | head -n 1
+}
+
+_ai_cli_codex_top_level_reasoning_effort() {
+  local config_toml="$1"
+  local value
+
+  value=$(_ai_cli_codex_top_level_string_value "$config_toml" model_reasoning_effort)
+  case "$value" in
+    minimal|low|medium|high|xhigh|max|ultra) print -r -- "$value" ;;
+  esac
+}
+
+_ai_cli_codex_model_catalog_selection() {
+  local catalog_json="$1"
+  local existing_model="$2"
+  local existing_reasoning_effort="$3"
+  local configured_reasoning_effort="$4"
+
+  jq -c \
+    --arg existing_model "$existing_model" \
+    --arg existing_reasoning_effort "$existing_reasoning_effort" \
+    --arg configured_reasoning_effort "$configured_reasoning_effort" \
+    '
+      (.models // []) as $models
+      | (($models | map(select(.model == $existing_model)) | .[0]) // $models[0]) as $selected
+      | ($selected.supported_reasoning_levels // [] | map(.effort)) as $supported
+      | (if ($existing_reasoning_effort != "" and ($supported | index($existing_reasoning_effort)) != null) then
+           $existing_reasoning_effort
+         elif ($configured_reasoning_effort != "" and ($supported | index($configured_reasoning_effort)) != null) then
+           $configured_reasoning_effort
+         elif (($selected.default_reasoning_level // "") != "" and
+               ($supported | index($selected.default_reasoning_level)) != null) then
+           $selected.default_reasoning_level
+         else
+           $supported[0] // "high"
+         end) as $reasoning_effort
+      | {model: ($selected.model // ""), reasoning_effort: $reasoning_effort}
+    ' <<<"$catalog_json"
+}
+
+_ai_cli_codex_model_catalog_template() {
+  jq -cn '
+    {
+      model: "ai-cli-template",
+      slug: "ai-cli-template",
+      display_name: "ai-cli-template",
+      description: "ai-cli-template",
+      base_instructions: "You are Codex, a coding agent.",
+      default_reasoning_level: "high",
+      supported_reasoning_levels: [
+        {effort: "none", description: "Disable Thinking"},
+        {effort: "high", description: "Enabled Thinking"}
+      ],
+      shell_type: "shell_command",
+      visibility: "list",
+      supported_in_api: true,
+      priority: 0,
+      supports_reasoning_summaries: true,
+      default_reasoning_summary: "none",
+      support_verbosity: false,
+      truncation_policy: {mode: "bytes", limit: 10000},
+      supports_parallel_tool_calls: false,
+      supports_image_detail_original: false,
+      context_window: 262144,
+      max_context_window: 262144,
+      effective_context_window_percent: 95,
+      experimental_supported_tools: [],
+      input_modalities: ["text", "image"],
+      supports_search_tool: false
+    }
+  '
+}
+
+_ai_cli_codex_model_catalog_json() {
+  local provider_json="$1"
+  local config_toml="${2-}"
+  local template_json model_count configured_reasoning_effort
+
+  configured_reasoning_effort="high"
+  if [[ -n "$config_toml" ]]; then
+    configured_reasoning_effort=$(_ai_cli_codex_top_level_reasoning_effort "$config_toml")
+    [[ -n "$configured_reasoning_effort" ]] || configured_reasoning_effort="high"
+  fi
+
+  model_count=$(jq -r '
+    (.provider.settingsConfig.modelCatalog.models // [])
+    | if type == "array" then length else 0 end
+  ' <<<"$provider_json") || return 1
+  (( model_count > 0 )) || return 0
+
+  template_json=$(_ai_cli_codex_model_catalog_template) || return 1
+  jq \
+    --argjson template "$template_json" \
+    --arg configured_reasoning_effort "$configured_reasoning_effort" \
+    '
+    def trim_string($value):
+      $value | gsub("^[[:space:]]+|[[:space:]]+$"; "");
+
+    def context_window($value; $fallback):
+      if (($value | type) == "number") then
+        if $value > 0 then $value else $fallback end
+      elif (($value | type) == "string") then
+        ($value | try tonumber catch null) as $number
+        | if (($number | type) == "number" and $number > 0) then
+            $number
+          else
+            $fallback
+          end
+      else
+        $fallback
+      end;
+
+    (.provider.settingsConfig.modelCatalog.models // []) as $source
+    | reduce $source[] as $entry (
+        [];
+        ($entry.model // null) as $model_value
+        | if (($model_value | type) != "string") then
+            .
+          else
+            ($model_value | trim_string(.)) as $model
+            | if (($model | length) == 0 or any(.[]; .model == $model)) then
+                .
+              else
+                ($entry.displayName // $entry.display_name // null) as $display_value
+                | (if (($display_value | type) == "string") then
+                     ($display_value | trim_string(.))
+                   else
+                     ""
+                   end) as $display_candidate
+                | if (($display_candidate | length) > 0) then
+                    $display_candidate
+                  else
+                    $model
+                  end as $display_name
+                | context_window(
+                    ($entry.contextWindow // $entry.context_window // null);
+                    $template.context_window
+                  ) as $context_window
+                | (1000 + length) as $priority
+                | . + [(
+                    $template
+                    | .model = $model
+                    | .slug = $model
+                    | .display_name = $display_name
+                    | .description = $display_name
+                    | .context_window = $context_window
+                    | .max_context_window = $context_window
+                    | .priority = $priority
+                    | if ($model | startswith("deepseek-")) then
+                        .default_reasoning_level = $configured_reasoning_effort
+                        | .supported_reasoning_levels = [
+                            {effort: "low", description: "Fast responses with lighter reasoning"},
+                            {effort: "high", description: "Greater reasoning depth for complex problems"},
+                            {effort: "max", description: "Maximum reasoning depth for the hardest problems"}
+                          ]
+                      elif any(.supported_reasoning_levels[]; .effort == $configured_reasoning_effort) then
+                        .default_reasoning_level = $configured_reasoning_effort
+                      else
+                        .default_reasoning_level = $configured_reasoning_effort
+                        | .supported_reasoning_levels += [{
+                            effort: $configured_reasoning_effort,
+                            description: "Configured reasoning effort"
+                          }]
+                      end
+                  )]
+              end
+          end
+      )
+    | {models: .}
+  ' <<<"$provider_json"
+}
+
+_ai_cli_prepare_codex_model_catalog_profile() {
+  local config_toml="$1"
+  local catalog_filename="$2"
+
+  awk -v catalog_filename="$catalog_filename" '
+    function insert_catalog() {
+      print "model_catalog_json = \"" catalog_filename "\""
+      inserted = 1
+    }
+
+    BEGIN {
+      inserted = 0
+    }
+
+    /^[[:space:]]*\[/ {
+      if (!inserted) {
+        insert_catalog()
+      }
+    }
+
+    /^[[:space:]]*model_catalog_json[[:space:]]*=/ {
+      next
+    }
+
+    {
+      print
+    }
+
+    END {
+      if (!inserted) {
+        insert_catalog()
+      }
+    }
+  ' <<<"$config_toml"
+}
+
+_ai_cli_prepare_codex_model_selection_profile() {
+  local config_toml="$1"
+  local selected_model="$2"
+  local selected_reasoning_effort="$3"
+
+  awk \
+    -v selected_model="$selected_model" \
+    -v selected_reasoning_effort="$selected_reasoning_effort" \
+    '
+      function insert_missing() {
+        if (!saw_model) {
+          print "model = \"" selected_model "\""
+        }
+        if (!saw_reasoning_effort) {
+          print "model_reasoning_effort = \"" selected_reasoning_effort "\""
+        }
+        inserted = 1
+      }
+
+      BEGIN {
+        in_table = 0
+        inserted = 0
+        saw_model = 0
+        saw_reasoning_effort = 0
+      }
+
+      /^[[:space:]]*\[/ {
+        if (!inserted) {
+          insert_missing()
+        }
+        in_table = 1
+      }
+
+      {
+        if (!in_table && $0 ~ /^[[:space:]]*model[[:space:]]*=/) {
+          print "model = \"" selected_model "\""
+          saw_model = 1
+          next
+        }
+        if (!in_table && $0 ~ /^[[:space:]]*model_reasoning_effort[[:space:]]*=/) {
+          print "model_reasoning_effort = \"" selected_reasoning_effort "\""
+          saw_reasoning_effort = 1
+          next
+        }
+        print
+      }
+
+      END {
+        if (!inserted) {
+          insert_missing()
+        }
+      }
+    ' <<<"$config_toml"
+}
+
+_ai_cli_write_codex_model_catalog() {
+  local codex_home="$1"
+  local catalog_filename="$2"
+  local catalog_json="$3"
+  local catalog_file temp_file
+
+  mkdir -p -- "$codex_home" || {
+    _ai_cli_die "failed to create CODEX_HOME: $codex_home"
+    return 1
+  }
+
+  catalog_file="$codex_home/$catalog_filename"
+  if [[ -L "$catalog_file" ]]; then
+    _ai_cli_die "refusing to overwrite symlinked Codex model catalog: $catalog_file"
+    return 1
+  fi
+
+  temp_file=$(mktemp "$codex_home/.ai-cli-catalog.XXXXXX") || {
+    _ai_cli_die "failed to create temporary Codex model catalog"
+    return 1
+  }
+
+  if ! print -r -- "$catalog_json" >"$temp_file"; then
+    rm -f -- "$temp_file"
+    _ai_cli_die "failed to write temporary Codex model catalog"
+    return 1
+  fi
+  chmod 600 "$temp_file" || {
+    rm -f -- "$temp_file"
+    _ai_cli_die "failed to protect temporary Codex model catalog"
+    return 1
+  }
+
+  if ! mv -f -- "$temp_file" "$catalog_file"; then
+    rm -f -- "$temp_file"
+    _ai_cli_die "failed to install Codex model catalog: $catalog_file"
+    return 1
+  fi
+
+  print -r -- "$catalog_file"
+}
+
 _ai_cli_write_codex_profile() {
   local codex_home="$1"
   local provider_id="$2"
@@ -287,8 +609,12 @@ _ai_cli_run_codex() {
   shift
 
   local config_json provider_matches provider_json provider_id
-  local config_toml profile_toml auth_value model_provider configured_env_key codex_home
-  local match_count
+  local config_toml profile_toml catalog_json catalog_filename
+  local existing_profile_file existing_profile_toml selection_json
+  local existing_model existing_reasoning_effort configured_reasoning_effort
+  local selected_model selected_reasoning_effort
+  local auth_value model_provider configured_env_key codex_home
+  local match_count catalog_count
 
   _ai_cli_require_commands cc-switch jq codex || return 1
   _ai_cli_reject_codex_profile_arg "$@" || return 1
@@ -363,6 +689,59 @@ _ai_cli_run_codex() {
   fi
 
   codex_home="${CODEX_HOME:-${HOME:-$PWD}/.codex}"
+  catalog_json=$(_ai_cli_codex_model_catalog_json "$provider_json" "$profile_toml") || {
+    _ai_cli_die "failed to generate model catalog for Codex provider '$provider_name'"
+    return 1
+  }
+  if [[ -n "$catalog_json" ]]; then
+    catalog_count=$(jq -r '.models | length' <<<"$catalog_json") || {
+      _ai_cli_die "failed to inspect model catalog for Codex provider '$provider_name'"
+      return 1
+    }
+    if (( catalog_count > 0 )); then
+      catalog_filename="$provider_id.model_catalog.json"
+      existing_profile_file="$codex_home/$provider_id.config.toml"
+      if [[ -L "$existing_profile_file" ]]; then
+        _ai_cli_die "refusing to read symlinked Codex profile: $existing_profile_file"
+        return 1
+      fi
+      existing_profile_toml=""
+      if [[ -f "$existing_profile_file" ]]; then
+        existing_profile_toml=$(<"$existing_profile_file")
+      fi
+
+      existing_model=$(_ai_cli_codex_top_level_string_value "$existing_profile_toml" model)
+      existing_reasoning_effort=$(_ai_cli_codex_top_level_reasoning_effort "$existing_profile_toml")
+      configured_reasoning_effort=$(_ai_cli_codex_top_level_reasoning_effort "$profile_toml")
+      [[ -n "$configured_reasoning_effort" ]] || configured_reasoning_effort="high"
+      selection_json=$(_ai_cli_codex_model_catalog_selection \
+        "$catalog_json" \
+        "$existing_model" \
+        "$existing_reasoning_effort" \
+        "$configured_reasoning_effort") || {
+        _ai_cli_die "failed to select model for Codex provider '$provider_name'"
+        return 1
+      }
+      selected_model=$(jq -r '.model // empty' <<<"$selection_json")
+      selected_reasoning_effort=$(jq -r '.reasoning_effort // empty' <<<"$selection_json")
+      [[ -n "$selected_model" && -n "$selected_reasoning_effort" ]] || {
+        _ai_cli_die "Codex provider '$provider_name' has no usable model selection"
+        return 1
+      }
+      profile_toml=$(_ai_cli_prepare_codex_model_selection_profile \
+        "$profile_toml" \
+        "$selected_model" \
+        "$selected_reasoning_effort") || {
+        _ai_cli_die "failed to prepare model selection for Codex provider '$provider_name'"
+        return 1
+      }
+      profile_toml=$(_ai_cli_prepare_codex_model_catalog_profile "$profile_toml" "$catalog_filename") || {
+        _ai_cli_die "failed to prepare model catalog profile for Codex provider '$provider_name'"
+        return 1
+      }
+      _ai_cli_write_codex_model_catalog "$codex_home" "$catalog_filename" "$catalog_json" >/dev/null || return 1
+    fi
+  fi
   _ai_cli_write_codex_profile "$codex_home" "$provider_id" "$profile_toml" >/dev/null || return 1
 
   (
