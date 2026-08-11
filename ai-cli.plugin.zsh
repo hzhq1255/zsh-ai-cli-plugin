@@ -102,6 +102,59 @@ _ai_cli_codex_model_provider() {
     | head -n 1
 }
 
+_ai_cli_prepare_codex_profile() {
+  local config_toml="$1"
+  local model_provider="$2"
+
+  printf '%s\n' "$config_toml" | awk -v target="$model_provider" '
+    BEGIN {
+      target_re = "^[[:space:]]*\\[model_providers\\." target "\\][[:space:]]*$"
+      in_target = 0
+      found_target = 0
+      saw_model_provider = 0
+    }
+
+    /^[[:space:]]*\[/ {
+      if ($0 ~ target_re) {
+        print ""
+        print "[model_providers." target "]"
+        in_target = 1
+        found_target = 1
+      } else {
+        in_target = 0
+      }
+      next
+    }
+
+    {
+      if (in_target) {
+        if ($0 ~ /^[[:space:]]*(name|wire_api|requires_openai_auth|base_url|env_key|experimental_bearer_token)[[:space:]]*=/) {
+          print
+        }
+        next
+      }
+
+      if ($0 ~ /^[[:space:]]*(model_provider|model|model_reasoning_effort)[[:space:]]*=/) {
+        print
+        if ($0 ~ /^[[:space:]]*model_provider[[:space:]]*=/) {
+          saw_model_provider = 1
+        }
+      }
+    }
+
+    END {
+      if (!saw_model_provider) {
+        print "ai-cli: provider config has no model_provider" > "/dev/stderr"
+        exit 3
+      }
+      if (!found_target) {
+        print "ai-cli: provider model table not found" > "/dev/stderr"
+        exit 3
+      }
+    }
+  '
+}
+
 _ai_cli_codex_config_env_key() {
   local config_toml="$1"
   local model_provider="$2"
@@ -658,10 +711,17 @@ _ai_cli_run_codex() {
   }
 
   model_provider=$(_ai_cli_codex_model_provider "$config_toml")
-  configured_env_key=""
-  if [[ -n "$model_provider" && "$model_provider" =~ '^[A-Za-z0-9_-]+$' ]]; then
-    configured_env_key=$(_ai_cli_codex_config_env_key "$config_toml" "$model_provider")
+  [[ -n "$model_provider" ]] || {
+    _ai_cli_die "provider '$provider_name' has no model_provider in Codex config"
+    return 1
+  }
+  if [[ ! "$model_provider" =~ '^[A-Za-z0-9_-]+$' ]]; then
+    _ai_cli_die "provider '$provider_name' has an unsupported model_provider: $model_provider"
+    return 1
   fi
+
+  configured_env_key=""
+  configured_env_key=$(_ai_cli_codex_config_env_key "$config_toml" "$model_provider")
   if [[ -n "$configured_env_key" && ! "$configured_env_key" =~ '^[A-Za-z_][A-Za-z0-9_]*$' ]]; then
     _ai_cli_die "provider '$provider_name' has an unsupported env_key: $configured_env_key"
     return 1
@@ -672,17 +732,12 @@ _ai_cli_run_codex() {
     return 1
   }
 
-  profile_toml="$config_toml"
+  profile_toml=$(_ai_cli_prepare_codex_profile "$config_toml" "$model_provider") || {
+    _ai_cli_die "failed to prepare provider overlay for Codex provider '$provider_name'"
+    return 1
+  }
   if [[ -n "$auth_value" ]]; then
-    [[ -n "$model_provider" ]] || {
-      _ai_cli_die "provider '$provider_name' has an API key but no model_provider in Codex config"
-      return 1
-    }
-    if [[ ! "$model_provider" =~ '^[A-Za-z0-9_-]+$' ]]; then
-      _ai_cli_die "provider '$provider_name' has an unsupported model_provider: $model_provider"
-      return 1
-    fi
-    if ! profile_toml=$(_ai_cli_prepare_codex_env_profile "$config_toml" "$model_provider"); then
+    if ! profile_toml=$(_ai_cli_prepare_codex_env_profile "$profile_toml" "$model_provider"); then
       _ai_cli_die "failed to prepare environment-auth profile for Codex provider '$provider_name'"
       return 1
     fi
@@ -760,7 +815,6 @@ modelscope() { _ai_cli_start claude 'ModelScope' "$@"; }
 minimaxi() { _ai_cli_start claude 'MiniMax' "$@"; }
 hybgzs() { _ai_cli_start claude '黑与白' "$@"; }
 nvidia() { _ai_cli_start claude 'Nvidia' "$@"; }
-ccwj() { _ai_cli_start claude '万界方舟' "$@"; }
 
 codex-cpa() { _ai_cli_run_codex 'CPA' "$@"; }
 codex-hyb() { _ai_cli_run_codex '黑与白' "$@"; }
@@ -768,4 +822,3 @@ codex-hc() { _ai_cli_run_codex 'hc' "$@"; }
 codex-s2a() { _ai_cli_run_codex 'sub2api' "$@"; }
 codex-ds() { _ai_cli_run_codex 'DeepSeek' "$@"; }
 codex-openai() { _ai_cli_run_codex 'OpenAI Official' "$@"; }
-codex-wj() { _ai_cli_run_codex '万界方舟' "$@"; }

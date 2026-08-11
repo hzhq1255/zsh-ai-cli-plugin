@@ -24,7 +24,6 @@
 | `codex-s2a` | sub2api |
 | `codex-ds` | DeepSeek |
 | `codex-openai` | OpenAI (默认) |
-| `codex-wj` | 万界方舟 |
 
 ### 4. 启动 Provider
 - Claude 别名通过 `cc-switch start claude <provider> -- <native args...>` 启动

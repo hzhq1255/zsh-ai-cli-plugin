@@ -14,14 +14,12 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `minimaxi` | MiniMax AI | claude |
 | `hybgzs` | 黑与白 | claude |
 | `nvidia` | Nvidia | claude |
-| `ccwj` | 万界方舟 | claude |
 | `codex-cpa` | Codex CPA | codex |
 | `codex-hyb` | 黑与白 | codex |
 | `codex-hc` | hc | codex |
 | `codex-s2a` | sub2api | codex |
 | `codex-ds` | DeepSeek | codex |
 | `codex-openai` | OpenAI Official | codex |
-| `codex-wj` | 万界方舟 | codex |
 
 ## 依赖
 
@@ -89,7 +87,6 @@ ccs provider add
 | sub2api | `https://sub2api.hzhq1255.work/v1` | (按你的 cc-switch 配置) |
 | DeepSeek | `https://api.deepseek.com` | `gpt-5.6` |
 | OpenAI Official | (官方默认) | (官方默认) |
-| 万界方舟 | (按你的 cc-switch 配置) | (按你的 cc-switch 配置) |
 
 ### 5. 验证配置
 
@@ -124,9 +121,6 @@ deepseek "解释这段代码"
 # 使用 Nvidia
 nvidia --version
 
-# 使用万界方舟 Claude
-ccwj "介绍一下你自己"
-
 # 使用 Codex
 codex-cpa "生成一个 REST API"
 
@@ -142,9 +136,6 @@ codex-ds "分析这个项目的目录结构"
 # 在共享会话目录中恢复指定会话；继续使用对应 provider alias
 codex-s2a resume 019fd0c7-9ced-7732-b365-c429ce57e706
 codex-openai resume 019fd0c7-9ced-7732-b365-c429ce57e706
-
-# 使用万界方舟 Codex
-codex-wj "重构这个 shell 插件"
 
 # 使用 hc Codex
 codex-hc "检查这个项目"

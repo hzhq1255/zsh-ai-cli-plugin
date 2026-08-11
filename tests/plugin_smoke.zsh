@@ -65,7 +65,7 @@ cat >"$AI_CLI_TEST_CONFIG" <<'EOF'
           "auth": {
             "OPENAI_API_KEY": "sub2api-key"
           },
-          "config": "model_provider = \"custom\"\nmodel = \"gpt-5.6-luna\"\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://sub2api.example/v1\"\n"
+          "config": "model_provider = \"custom\"\nmodel = \"gpt-5.6-luna\"\nmodel_reasoning_effort = \"max\"\ndisable_response_storage = true\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://sub2api.example/v1\"\n[sandbox_workspace_write]\nnetwork_access = true\n[tui]\nstatus_line = [\"model-with-reasoning\"]\n[mcp_servers.stale]\ncommand = \"stale-mcp-command\"\n[projects.\"/tmp/stale-project\"]\ntrust_level = \"trusted\"\n"
         }
       },
       "deepseek-id": {
@@ -237,16 +237,17 @@ export HOME="$WORK_HOME"
 export CODEX_HOME="$CODEX_HOME"
 source "$PLUGIN_FILE"
 
+removed_claude_alias="cc"wj
+if (( $+functions[$removed_claude_alias] )); then
+  fail "removed Claude alias should not be defined"
+fi
+
 claude_output=$(deepseek --dangerously-skip-permissions "hello world")
 assert_contains "$claude_output" "CLI=claude"
 assert_contains "$claude_output" "SELECTOR=DeepSeek"
 assert_contains "$claude_output" "ARG_COUNT=2"
 assert_contains "$claude_output" "ARG_1=--dangerously-skip-permissions"
 assert_contains "$claude_output" "ARG_2=hello world"
-
-ccwj_output=$(ccwj "hello")
-assert_contains "$ccwj_output" "CLI=claude"
-assert_contains "$ccwj_output" "SELECTOR=万界方舟"
 
 export OPENAI_API_KEY="stale-openai-key"
 export CUSTOM_API_KEY="stale-custom-api-key"
@@ -295,6 +296,11 @@ assert_contains "$codex_s2a_output" "CUSTOM_API_KEY=sub2api-key"
 assert_contains "$codex_s2a_output" "AI_CLI_CODEX_API_KEY="
 assert_contains "$codex_s2a_output" "requires_openai_auth = false"
 assert_contains "$codex_s2a_output" 'env_key = "CUSTOM_API_KEY"'
+assert_not_contains "$codex_s2a_output" "disable_response_storage = true"
+assert_not_contains "$codex_s2a_output" "[sandbox_workspace_write]"
+assert_not_contains "$codex_s2a_output" "[tui]"
+assert_not_contains "$codex_s2a_output" "stale-mcp-command"
+assert_not_contains "$codex_s2a_output" "stale-project"
 assert_contains "$codex_s2a_output" "CONFIG_COUNT=0"
 assert_contains "$codex_s2a_output" "ARG_COUNT=2"
 assert_contains "$codex_s2a_output" "ARG_1=resume"
