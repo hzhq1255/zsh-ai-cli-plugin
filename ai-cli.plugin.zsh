@@ -280,6 +280,109 @@ _ai_cli_prepare_codex_env_profile() {
   '
 }
 
+_ai_cli_extract_codex_custom_provider() {
+  local config_toml="$1"
+
+  awk '
+    BEGIN { in_target = 0; found = 0 }
+    /^[[:space:]]*\[/ {
+      if ($0 ~ /^[[:space:]]*\[model_providers\.custom(\.[^]]+)?\][[:space:]]*$/) {
+        in_target = 1
+        found = 1
+      } else if (in_target) {
+        exit
+      }
+    }
+    in_target { print }
+    END { if (!found) exit 3 }
+  ' <<<"$config_toml"
+}
+
+_ai_cli_replace_codex_custom_provider() {
+  local base_toml="$1"
+  local custom_toml="$2"
+
+  AI_CLI_CUSTOM_TOML="$custom_toml" awk '
+    function print_replacement() {
+      if (!inserted) {
+        if (printed_any) print ""
+        print ENVIRON["AI_CLI_CUSTOM_TOML"]
+        inserted = 1
+      }
+    }
+    BEGIN { skipping = 0; inserted = 0; printed_any = 0 }
+    /^[[:space:]]*\[/ {
+      if ($0 ~ /^[[:space:]]*\[model_providers\.custom(\.[^]]+)?\][[:space:]]*$/) {
+        if (!skipping) print_replacement()
+        skipping = 1
+        next
+      }
+      if (skipping) skipping = 0
+    }
+    !skipping {
+      print
+      printed_any = 1
+    }
+    END { print_replacement() }
+  ' <<<"$base_toml"
+}
+
+_ai_cli_read_codex_base_config() {
+  local codex_home="$1"
+  local config_file="$codex_home/config.toml"
+
+  [[ -e "$config_file" ]] || return 0
+  [[ ! -L "$config_file" ]] || {
+    _ai_cli_die "refusing to read symlinked Codex config: $config_file"
+    return 1
+  }
+  cat -- "$config_file"
+}
+
+_ai_cli_codex_requested_model() {
+  local arg
+  while (( $# )); do
+    arg="$1"
+    case "$arg" in
+      --model)
+        (( $# >= 2 )) && print -r -- "$2"
+        return 0
+        ;;
+      --model=*)
+        print -r -- "${arg#--model=}"
+        return 0
+        ;;
+    esac
+    shift
+  done
+}
+
+_ai_cli_prepare_codex_model_provider_profile() {
+  local config_toml="$1"
+  local model_provider="$2"
+
+  awk -v model_provider="$model_provider" '
+    function insert_provider() {
+      if (!saw_provider) print "model_provider = \"" model_provider "\""
+      inserted = 1
+    }
+    BEGIN { in_table = 0; saw_provider = 0; inserted = 0 }
+    /^[[:space:]]*\[/ {
+      if (!inserted) insert_provider()
+      in_table = 1
+    }
+    {
+      if (!in_table && $0 ~ /^[[:space:]]*model_provider[[:space:]]*=/) {
+        print "model_provider = \"" model_provider "\""
+        saw_provider = 1
+        next
+      }
+      print
+    }
+    END { if (!inserted) insert_provider() }
+  ' <<<"$config_toml"
+}
+
 _ai_cli_codex_top_level_string_value() {
   local config_toml="$1"
   local key="$2"
@@ -572,34 +675,38 @@ _ai_cli_write_codex_model_catalog() {
   }
 
   catalog_file="$codex_home/$catalog_filename"
-  if [[ -L "$catalog_file" ]]; then
-    _ai_cli_die "refusing to overwrite symlinked Codex model catalog: $catalog_file"
+  _ai_cli_write_codex_file_if_changed "$catalog_file" "$catalog_json" "model catalog"
+}
+
+_ai_cli_write_codex_file_if_changed() {
+  local target_file="$1"
+  local content="$2"
+  local description="$3"
+  local target_hash content_hash temp_file
+
+  if [[ -L "$target_file" ]]; then
+    _ai_cli_die "refusing to overwrite symlinked Codex $description: $target_file"
     return 1
   fi
+  content_hash=$(print -r -- "$content" | shasum -a 256 | awk '{print $1}') || return 1
+  if [[ -f "$target_file" ]]; then
+    target_hash=$(shasum -a 256 -- "$target_file" | awk '{print $1}') || return 1
+    if [[ "$content_hash" == "$target_hash" ]]; then
+      print -r -- "$target_file"
+      return 0
+    fi
+  fi
 
-  temp_file=$(mktemp "$codex_home/.ai-cli-catalog.XXXXXX") || {
-    _ai_cli_die "failed to create temporary Codex model catalog"
+  temp_file=$(mktemp "${target_file:h}/.ai-cli-${description// /-}.XXXXXX") || {
+    _ai_cli_die "failed to create temporary Codex $description"
     return 1
   }
-
-  if ! print -r -- "$catalog_json" >"$temp_file"; then
+  if ! print -r -- "$content" >"$temp_file" || ! chmod 600 "$temp_file" || ! mv -f -- "$temp_file" "$target_file"; then
     rm -f -- "$temp_file"
-    _ai_cli_die "failed to write temporary Codex model catalog"
+    _ai_cli_die "failed to install Codex $description: $target_file"
     return 1
   fi
-  chmod 600 "$temp_file" || {
-    rm -f -- "$temp_file"
-    _ai_cli_die "failed to protect temporary Codex model catalog"
-    return 1
-  }
-
-  if ! mv -f -- "$temp_file" "$catalog_file"; then
-    rm -f -- "$temp_file"
-    _ai_cli_die "failed to install Codex model catalog: $catalog_file"
-    return 1
-  fi
-
-  print -r -- "$catalog_file"
+  print -r -- "$target_file"
 }
 
 _ai_cli_write_codex_profile() {
@@ -614,34 +721,7 @@ _ai_cli_write_codex_profile() {
   }
 
   profile_file="$codex_home/$provider_id.config.toml"
-  if [[ -L "$profile_file" ]]; then
-    _ai_cli_die "refusing to overwrite symlinked Codex profile: $profile_file"
-    return 1
-  fi
-
-  temp_file=$(mktemp "$codex_home/.ai-cli-profile.XXXXXX") || {
-    _ai_cli_die "failed to create temporary Codex profile"
-    return 1
-  }
-
-  if ! print -r -- "$config_toml" >"$temp_file"; then
-    rm -f -- "$temp_file"
-    _ai_cli_die "failed to write temporary Codex profile"
-    return 1
-  fi
-  chmod 600 "$temp_file" || {
-    rm -f -- "$temp_file"
-    _ai_cli_die "failed to protect temporary Codex profile"
-    return 1
-  }
-
-  if ! mv -f -- "$temp_file" "$profile_file"; then
-    rm -f -- "$temp_file"
-    _ai_cli_die "failed to install Codex profile: $profile_file"
-    return 1
-  fi
-
-  print -r -- "$profile_file"
+  _ai_cli_write_codex_file_if_changed "$profile_file" "$config_toml" "profile"
 }
 
 _ai_cli_reject_codex_profile_arg() {
@@ -662,11 +742,12 @@ _ai_cli_run_codex() {
   shift
 
   local config_json provider_matches provider_json provider_id
-  local config_toml profile_toml catalog_json catalog_filename
+  local config_toml custom_toml base_toml profile_toml catalog_json catalog_filename
   local existing_profile_file existing_profile_toml selection_json
   local existing_model existing_reasoning_effort configured_reasoning_effort
   local selected_model selected_reasoning_effort
   local auth_value model_provider configured_env_key codex_home
+  local requested_model
   local match_count catalog_count
 
   _ai_cli_require_commands cc-switch jq codex || return 1
@@ -732,28 +813,49 @@ _ai_cli_run_codex() {
     return 1
   }
 
-  profile_toml=$(_ai_cli_prepare_codex_profile "$config_toml" "$model_provider") || {
-    _ai_cli_die "failed to prepare provider overlay for Codex provider '$provider_name'"
+  custom_toml=$(_ai_cli_extract_codex_custom_provider "$config_toml") || {
+    _ai_cli_die "provider '$provider_name' has no [model_providers.custom] configuration"
     return 1
   }
   if [[ -n "$auth_value" ]]; then
-    if ! profile_toml=$(_ai_cli_prepare_codex_env_profile "$profile_toml" "$model_provider"); then
+    if ! custom_toml=$(_ai_cli_prepare_codex_env_profile "$custom_toml" "$model_provider"); then
       _ai_cli_die "failed to prepare environment-auth profile for Codex provider '$provider_name'"
       return 1
     fi
   fi
 
   codex_home="${CODEX_HOME:-${HOME:-$PWD}/.codex}"
-  catalog_json=$(_ai_cli_codex_model_catalog_json "$provider_json" "$profile_toml") || {
-    _ai_cli_die "failed to generate model catalog for Codex provider '$provider_name'"
-    return 1
-  }
+  base_toml=$(_ai_cli_read_codex_base_config "$codex_home") || return 1
+  if [[ -n "$base_toml" ]]; then
+    profile_toml=$(_ai_cli_replace_codex_custom_provider "$base_toml" "$custom_toml") || return 1
+    profile_toml=$(_ai_cli_prepare_codex_model_provider_profile "$profile_toml" "$model_provider") || return 1
+  else
+    profile_toml=$(_ai_cli_prepare_codex_profile "$config_toml" "$model_provider") || {
+      _ai_cli_die "failed to prepare provider overlay for Codex provider '$provider_name'"
+      return 1
+    }
+    [[ -z "$auth_value" ]] || profile_toml=$(_ai_cli_prepare_codex_env_profile "$profile_toml" "$model_provider") || return 1
+  fi
+
+  if [[ "$provider_name" == "DeepSeek" ]]; then
+    catalog_json=$(_ai_cli_codex_model_catalog_json "$provider_json" "$profile_toml") || {
+      _ai_cli_die "failed to generate model catalog for Codex provider '$provider_name'"
+      return 1
+    }
+  else
+    catalog_json=""
+  fi
   if [[ -n "$catalog_json" ]]; then
     catalog_count=$(jq -r '.models | length' <<<"$catalog_json") || {
       _ai_cli_die "failed to inspect model catalog for Codex provider '$provider_name'"
       return 1
     }
     if (( catalog_count > 0 )); then
+      requested_model=$(_ai_cli_codex_requested_model "$@")
+      if [[ -n "$requested_model" ]] && ! jq -e --arg model "$requested_model" 'any(.models[]; .model == $model)' >/dev/null <<<"$catalog_json"; then
+        _ai_cli_die "model '$requested_model' is not available for Codex provider '$provider_name'; available models: $(jq -r '.models[].model' <<<"$catalog_json" | paste -sd ', ' -)"
+        return 1
+      fi
       catalog_filename="$provider_id.model_catalog.json"
       existing_profile_file="$codex_home/$provider_id.config.toml"
       if [[ -L "$existing_profile_file" ]]; then

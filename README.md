@@ -164,14 +164,15 @@ Claude 和 Codex 使用不同的启动路径。Claude 继续由 `cc-switch start
 |------|----------|
 | Claude 实现原理 | `cc-switch start claude <provider> -- <native args...>` |
 | Codex 配置来源 | `cc-switch config show` |
-| Codex profile | 写入 `${CODEX_HOME:-$HOME/.codex}/{provider-id}.config.toml`，并使用 `codex --profile {provider-id}` |
-| Profile 关系 | 这是叠加层，不是独立完整配置；应保留共享 `CODEX_HOME/config.toml` |
+| Codex profile | 以 `${CODEX_HOME:-$HOME/.codex}/config.toml` 为基底生成 `{provider-id}.config.toml`，并使用 `codex --profile {provider-id}` |
+| Profile 关系 | 保留本地基底的项目、MCP、TUI 与注释；仅替换当前 provider 的 `model_provider` 和 `[model_providers.custom]` |
 | Codex 会话 | 所有 Codex alias 使用同一个 `CODEX_HOME`，因此 `resume`、会话列表和历史保持共通 |
-| Codex 模型目录 | 从 provider 的 `modelCatalog` 生成 `${provider-id}.model_catalog.json`，profile 通过 `model_catalog_json` 指向独立文件 |
+| Codex 模型目录 | 仅 DeepSeek 从 provider 的 `modelCatalog` 生成 `${provider-id}.model_catalog.json` |
 | Codex 模型选择 | 首次启动默认使用模型目录第一项；已有 profile 中仍有效的模型和思考级别会被保留 |
 | 第三方认证 | 仅在 Codex 子进程中注入 `CUSTOM_API_KEY`，profile 将 provider 切换为 `env_key = "CUSTOM_API_KEY"` 认证 |
 | 官方认证 | 不注入第三方 API key，不修改共享 `auth.json`，继续使用官方登录凭据 |
 | 隔离性 | provider 配置通过 profile 隔离，认证通过子进程环境隔离，不切换全局当前 Provider |
+| 跳写 | profile 与模型目录内容的 SHA-256 不变时不覆盖文件，不改变修改时间 |
 | CLI 契约 | Codex 原生参数原样透传；`--profile`/`-p` 由 alias 管理，不能重复传入 |
 
 ### 核心函数
@@ -184,7 +185,7 @@ Claude 和 Codex 使用不同的启动路径。Claude 继续由 `cc-switch start
 
 Codex 的 `doctor` 不支持 `--profile`，需要直接运行 `codex doctor`；provider alias 适用于会话、`exec`、`resume`、`mcp` 等支持 profile 的运行命令。
 
-当 `cc-switch` 的 Codex provider 配置了模型映射表时，alias 会把 `modelCatalog.models` 转换为 Codex 的 `model_catalog_json` 文件。Codex 在启动时读取模型目录，因此修改映射后重新启动 Codex；每个 provider 使用独立文件，不会覆盖其他 provider 的模型列表。
+仅 `DeepSeek` alias 会把 cc-switch 的 `modelCatalog.models` 转换为 `model_catalog_json`，并校验 `--model`。其它 provider 不生成模型目录、不查询 `/models`，模型与思考档位完全由本地 `config.toml` 和用户传入的原生参数控制。
 首次启动时使用目录第一项作为默认模型；后续启动会优先复用该 provider profile 中仍存在于目录的模型和思考级别，避免每次重新选择。
 
 ```bash

@@ -233,6 +233,25 @@ cat >"$CODEX_HOME/auth.json" <<'EOF'
 EOF
 auth_before=$(cat "$CODEX_HOME/auth.json")
 
+cat >"$CODEX_HOME/config.toml" <<'EOF'
+# local configuration must survive provider switching
+model_provider = "custom"
+model = "gpt-5.6-luna"
+disable_response_storage = true
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://old.example/v1"
+
+[tui]
+status_line = ["model-with-reasoning"]
+
+[mcp_servers.local]
+command = "local-mcp"
+EOF
+
 export HOME="$WORK_HOME"
 export CODEX_HOME="$CODEX_HOME"
 source "$PLUGIN_FILE"
@@ -296,9 +315,8 @@ assert_contains "$codex_s2a_output" "CUSTOM_API_KEY=sub2api-key"
 assert_contains "$codex_s2a_output" "AI_CLI_CODEX_API_KEY="
 assert_contains "$codex_s2a_output" "requires_openai_auth = false"
 assert_contains "$codex_s2a_output" 'env_key = "CUSTOM_API_KEY"'
-assert_not_contains "$codex_s2a_output" "disable_response_storage = true"
-assert_not_contains "$codex_s2a_output" "[sandbox_workspace_write]"
-assert_not_contains "$codex_s2a_output" "[tui]"
+assert_contains "$codex_s2a_output" "disable_response_storage = true"
+assert_contains "$codex_s2a_output" "[tui]"
 assert_not_contains "$codex_s2a_output" "stale-mcp-command"
 assert_not_contains "$codex_s2a_output" "stale-project"
 assert_contains "$codex_s2a_output" "CONFIG_COUNT=0"
@@ -308,6 +326,9 @@ assert_contains "$codex_s2a_output" "ARG_2=019fd0c7-9ced-7732-b365-c429ce57e706"
 assert_file_contains "$CODEX_HOME/sub2api-id.config.toml" 'base_url = "https://sub2api.example/v1"'
 assert_file_contains "$CODEX_HOME/sub2api-id.config.toml" "requires_openai_auth = false"
 assert_file_contains "$CODEX_HOME/sub2api-id.config.toml" 'env_key = "CUSTOM_API_KEY"'
+assert_file_contains "$CODEX_HOME/sub2api-id.config.toml" '# local configuration must survive provider switching'
+assert_file_contains "$CODEX_HOME/sub2api-id.config.toml" 'command = "local-mcp"'
+assert_not_contains "$codex_s2a_output" "stale-mcp-command"
 
 codex_ds_output=$(codex-ds mcp list)
 assert_contains "$codex_ds_output" "CODEX_HOME=$CODEX_HOME"
@@ -333,6 +354,18 @@ assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "lo
 assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "high"'
 assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"effort": "max"'
 assert_file_contains "$CODEX_HOME/deepseek-id.model_catalog.json" '"default_reasoning_level": "high"'
+
+deepseek_profile_inode=$(stat -f '%i' "$CODEX_HOME/deepseek-id.config.toml")
+deepseek_catalog_inode=$(stat -f '%i' "$CODEX_HOME/deepseek-id.model_catalog.json")
+codex-ds mcp list >/dev/null
+[[ "$(stat -f '%i' "$CODEX_HOME/deepseek-id.config.toml")" == "$deepseek_profile_inode" ]] || fail "unchanged profile should not be replaced"
+[[ "$(stat -f '%i' "$CODEX_HOME/deepseek-id.model_catalog.json")" == "$deepseek_catalog_inode" ]] || fail "unchanged model catalog should not be replaced"
+
+invalid_model_log="$TEST_ROOT/invalid-model.log"
+if codex-ds --model unavailable-model mcp list >"$invalid_model_log" 2>&1; then
+  fail "expected unavailable provider model to fail"
+fi
+assert_contains "$(cat "$invalid_model_log")" "model 'unavailable-model' is not available for Codex provider 'DeepSeek'"
 
 deepseek_catalog_json=$(<"$CODEX_HOME/deepseek-id.model_catalog.json")
 saved_deepseek_selection=$(_ai_cli_codex_model_catalog_selection \
@@ -384,6 +417,7 @@ assert_contains "$future_output" "requires_openai_auth = false"
 assert_contains "$future_output" 'env_key = "CUSTOM_API_KEY"'
 assert_file_contains "$CODEX_HOME/future-id.config.toml" 'base_url = "https://future.example/v1"'
 assert_file_contains "$CODEX_HOME/future-id.config.toml" 'env_key = "CUSTOM_API_KEY"'
+assert_not_contains "$future_output" 'model_catalog_json ='
 [[ "$CUSTOM_TOKEN" == "stale-custom-token" ]] || fail "provider env leaked into the parent shell"
 
 profile_arg_log="$TEST_ROOT/profile-arg.log"

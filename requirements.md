@@ -28,12 +28,13 @@
 ### 4. 启动 Provider
 - Claude 别名通过 `cc-switch start claude <provider> -- <native args...>` 启动
 - Codex 别名通过 `cc-switch config show` 获取指定 provider 的 ID、`config.toml` 和认证配置
-- Codex profile 按 provider ID 写入 `${CODEX_HOME:-$HOME/.codex}/{provider-id}.config.toml`
-- Codex provider 的 `settingsConfig.modelCatalog.models` 按 provider ID 写入 `${CODEX_HOME:-$HOME/.codex}/{provider-id}.model_catalog.json`，并由 profile 的 `model_catalog_json` 引用
+- Codex profile 以 `${CODEX_HOME:-$HOME/.codex}/config.toml` 为基底，按 provider ID 写入 `{provider-id}.config.toml`；仅替换 `model_provider` 与 `[model_providers.custom]`
+- 仅 DeepSeek provider 使用 `settingsConfig.modelCatalog.models`，按 provider ID 写入 `${CODEX_HOME:-$HOME/.codex}/{provider-id}.model_catalog.json`，并由 profile 的 `model_catalog_json` 引用
 - 有模型目录时首次默认使用目录第一项；如果 provider profile 中保存的模型和思考级别仍有效，则启动时继续复用
 - profile 是叠加层，不能替代共享 `CODEX_HOME/config.toml`
 - Codex 使用共享 `CODEX_HOME` 启动 `codex --profile <provider-id> ...`，保证会话与 `resume` 共通
 - 第三方 Codex profile 统一使用 `env_key = "CUSTOM_API_KEY"`，仅在子进程中注入认证；OpenAI Official 不修改共享 `auth.json`
+- profile 与模型目录生成内容的 SHA-256 未变化时不得重新写入
 - 启动指定 Provider 时不切换全局当前 Provider
 - 原生参数原样透传；Codex 的 `--profile`/`-p` 由 alias 管理
 - `doctor` 等不支持 `--profile` 的 Codex 管理命令直接使用原生 `codex`
