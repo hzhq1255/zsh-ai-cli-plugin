@@ -344,7 +344,7 @@ _ai_cli_codex_requested_model() {
   while (( $# )); do
     arg="$1"
     case "$arg" in
-      --model)
+      --model|-m)
         (( $# >= 2 )) && print -r -- "$2"
         return 0
         ;;
@@ -741,7 +741,7 @@ _ai_cli_run_codex() {
   local provider_name="$1"
   shift
 
-  local config_json provider_matches provider_json provider_id
+  local config_json provider_matches provider_json provider_id profile_id
   local config_toml custom_toml base_toml profile_toml catalog_json catalog_filename
   local existing_profile_file existing_profile_toml selection_json
   local existing_model existing_reasoning_effort configured_reasoning_effort
@@ -782,9 +782,13 @@ _ai_cli_run_codex() {
     _ai_cli_die "Codex provider '$provider_name' has no provider ID"
     return 1
   }
-  if [[ ! "$provider_id" =~ '^[A-Za-z0-9_-]+$' ]]; then
+  if [[ ! "$provider_id" =~ '^[[:alnum:]_-]+$' ]]; then
     _ai_cli_die "Codex provider '$provider_name' has an unsupported provider ID: $provider_id"
     return 1
+  fi
+  profile_id="$provider_id"
+  if [[ ! "$profile_id" =~ '^[A-Za-z0-9_-]+$' ]]; then
+    profile_id="provider-$(print -rn -- "$provider_id" | shasum -a 256 | awk '{print substr($1, 1, 16)}')" || return 1
   fi
   [[ -n "$config_toml" ]] || {
     _ai_cli_die "provider '$provider_name' does not define Codex config"
@@ -856,8 +860,8 @@ _ai_cli_run_codex() {
         _ai_cli_die "model '$requested_model' is not available for Codex provider '$provider_name'; available models: $(jq -r '.models[].model' <<<"$catalog_json" | paste -sd ', ' -)"
         return 1
       fi
-      catalog_filename="$provider_id.model_catalog.json"
-      existing_profile_file="$codex_home/$provider_id.config.toml"
+      catalog_filename="$profile_id.model_catalog.json"
+      existing_profile_file="$codex_home/$profile_id.config.toml"
       if [[ -L "$existing_profile_file" ]]; then
         _ai_cli_die "refusing to read symlinked Codex profile: $existing_profile_file"
         return 1
@@ -899,7 +903,7 @@ _ai_cli_run_codex() {
       _ai_cli_write_codex_model_catalog "$codex_home" "$catalog_filename" "$catalog_json" >/dev/null || return 1
     fi
   fi
-  _ai_cli_write_codex_profile "$codex_home" "$provider_id" "$profile_toml" >/dev/null || return 1
+  _ai_cli_write_codex_profile "$codex_home" "$profile_id" "$profile_toml" >/dev/null || return 1
 
   (
     export CODEX_HOME="$codex_home"
@@ -907,7 +911,7 @@ _ai_cli_run_codex() {
     if [[ -n "$auth_value" ]]; then
       export CUSTOM_API_KEY="$auth_value"
     fi
-    command codex --profile "$provider_id" "$@"
+    command codex --profile "$profile_id" "$@"
   )
 }
 
@@ -923,4 +927,11 @@ codex-hyb() { _ai_cli_run_codex '黑与白' "$@"; }
 codex-hc() { _ai_cli_run_codex 'hc' "$@"; }
 codex-s2a() { _ai_cli_run_codex 'sub2api' "$@"; }
 codex-ds() { _ai_cli_run_codex 'DeepSeek' "$@"; }
+codex-zai() {
+  if [[ -n "$(_ai_cli_codex_requested_model "$@")" ]]; then
+    _ai_cli_run_codex 'zai' "$@"
+  else
+    _ai_cli_run_codex 'zai' --model glm-5.3 "$@"
+  fi
+}
 codex-openai() { _ai_cli_run_codex 'OpenAI Official' "$@"; }

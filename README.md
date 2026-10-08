@@ -19,6 +19,7 @@ AI CLI 工具快捷封装插件，基于 [cc-switch-cli](https://github.com/Sala
 | `codex-hc` | hc | codex |
 | `codex-s2a` | sub2api | codex |
 | `codex-ds` | DeepSeek | codex |
+| `codex-zai` | 智谱 zai | codex |
 | `codex-openai` | OpenAI Official | codex |
 
 ## 依赖
@@ -86,6 +87,7 @@ ccs provider add
 | hc | (按你的 cc-switch 配置) | (按你的 cc-switch 配置) |
 | sub2api | `https://sub2api.hzhq1255.work/v1` | (按你的 cc-switch 配置) |
 | DeepSeek | `https://api.deepseek.com` | `gpt-5.6` |
+| zai | `https://open.bigmodel.cn/api/v1` | `glm-5.3` |
 | OpenAI Official | (官方默认) | (官方默认) |
 
 ### 5. 验证配置
@@ -133,6 +135,9 @@ codex-s2a "生成一个 REST API"
 # 使用 DeepSeek Codex
 codex-ds "分析这个项目的目录结构"
 
+# 使用智谱 Codex（默认 glm-5.3，可用 --model 或 -m 覆盖）
+codex-zai "分析这个项目的目录结构"
+
 # 在共享会话目录中恢复指定会话；继续使用对应 provider alias
 codex-s2a resume 019fd0c7-9ced-7732-b365-c429ce57e706
 codex-openai resume 019fd0c7-9ced-7732-b365-c429ce57e706
@@ -164,11 +169,12 @@ Claude 和 Codex 使用不同的启动路径。Claude 继续由 `cc-switch start
 |------|----------|
 | Claude 实现原理 | `cc-switch start claude <provider> -- <native args...>` |
 | Codex 配置来源 | `cc-switch config show` |
-| Codex profile | 以 `${CODEX_HOME:-$HOME/.codex}/config.toml` 为基底生成 `{provider-id}.config.toml`，并使用 `codex --profile {provider-id}` |
+| Codex profile | 以 `${CODEX_HOME:-$HOME/.codex}/config.toml` 为基底生成 profile；ASCII provider ID 直接使用，中文 ID 转为稳定的 `provider-{hash}` 名称 |
 | Profile 关系 | 保留本地基底的项目、MCP、TUI 与注释；仅替换当前 provider 的 `model_provider` 和 `[model_providers.custom]` |
 | Codex 会话 | 所有 Codex alias 使用同一个 `CODEX_HOME`，因此 `resume`、会话列表和历史保持共通 |
 | Codex 模型目录 | 仅 DeepSeek 从 provider 的 `modelCatalog` 生成 `${provider-id}.model_catalog.json` |
 | Codex 模型选择 | 首次启动默认使用模型目录第一项；已有 profile 中仍有效的模型和思考级别会被保留 |
+| 智谱模型 | `codex-zai` 默认传入 `--model glm-5.3`，显式 `--model` 或 `-m` 优先 |
 | 第三方认证 | 仅在 Codex 子进程中注入 `CUSTOM_API_KEY`，profile 将 provider 切换为 `env_key = "CUSTOM_API_KEY"` 认证 |
 | 官方认证 | 不注入第三方 API key，不修改共享 `auth.json`，继续使用官方登录凭据 |
 | 隔离性 | provider 配置通过 profile 隔离，认证通过子进程环境隔离，不切换全局当前 Provider |

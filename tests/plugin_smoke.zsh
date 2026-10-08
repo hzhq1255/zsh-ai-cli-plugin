@@ -112,6 +112,13 @@ cat >"$AI_CLI_TEST_CONFIG" <<'EOF'
           },
           "config": "model_provider = \"custom\"\nmodel = \"future-model\"\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nenv_key = \"CUSTOM_TOKEN\"\nbase_url = \"https://future.example/v1\"\n"
         }
+      },
+      "智谱": {
+        "name": "zai",
+        "settingsConfig": {
+          "auth": { "OPENAI_API_KEY": "zai-key" },
+          "config": "model_provider = \"custom\"\nmodel = \"glm-5.3\"\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://open.bigmodel.cn/api/v1\"\n"
+        }
       }
     }
   }
@@ -306,6 +313,21 @@ assert_file_contains "$CODEX_HOME/hyb-id.config.toml" 'env_key = "CUSTOM_API_KEY
 [[ "$OPENAI_API_KEY" == "stale-openai-key" ]] || fail "provider auth leaked into the parent shell"
 [[ "$CUSTOM_API_KEY" == "stale-custom-api-key" ]] || fail "custom auth leaked into the parent shell"
 [[ "$AI_CLI_CODEX_API_KEY" == "stale-ai-cli-key" ]] || fail "legacy auth leaked into the parent shell"
+
+codex_zai_output=$(codex-zai "inspect this project")
+zai_profile_id="provider-$(print -rn -- '智谱' | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
+assert_contains "$codex_zai_output" "PROFILE=$zai_profile_id"
+assert_contains "$codex_zai_output" "PROFILE_FILE=$CODEX_HOME/$zai_profile_id.config.toml"
+assert_contains "$codex_zai_output" "CUSTOM_API_KEY=zai-key"
+assert_contains "$codex_zai_output" "ARG_1=--model"
+assert_contains "$codex_zai_output" "ARG_2=glm-5.3"
+assert_contains "$codex_zai_output" "ARG_3=inspect this project"
+assert_file_contains "$CODEX_HOME/$zai_profile_id.config.toml" 'base_url = "https://open.bigmodel.cn/api/v1"'
+assert_file_contains "$CODEX_HOME/$zai_profile_id.config.toml" 'env_key = "CUSTOM_API_KEY"'
+codex_zai_override_output=$(codex-zai -m glm-5-turbo "inspect this project")
+assert_contains "$codex_zai_override_output" "ARG_1=-m"
+assert_contains "$codex_zai_override_output" "ARG_2=glm-5-turbo"
+assert_contains "$codex_zai_override_output" "ARG_COUNT=3"
 
 codex_s2a_output=$(codex-s2a resume "019fd0c7-9ced-7732-b365-c429ce57e706")
 assert_contains "$codex_s2a_output" "CODEX_HOME=$CODEX_HOME"
